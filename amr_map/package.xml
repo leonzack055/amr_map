@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>amr_map</name>
+  <version>0.0.0</version>
+  <description>此项目是一个使用RO2和git进行项目与依赖管理的项目介绍。</description>
+  <maintainer email="zhang.liang159@byd.com">xxy</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>cartographer</depend>
+  <depend>byd_mapbuilder_msgs</depend>
+  <depend>cartographer_ros</depend>
+  <depend>cartographer_ros_msgs</depend>
+  <depend>cartographer_rviz</depend>
+  <depend>eigen</depend>
+  <depend>libabsl-dev</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>rviz_common</depend>
+  <depend>rviz_ogre_vendor</depend>
+  <depend>rviz_rendering</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

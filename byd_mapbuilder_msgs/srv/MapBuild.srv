@@ -1,0 +1,8 @@
+# 建图任务请求
+
+byd_mapbuilder_msgs/MapBuildRequest req
+string filename
+string bagfile
+---
+byd_mapbuilder_msgs/MapBuildStatus status
+string msg

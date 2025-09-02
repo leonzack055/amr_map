@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="byd_amr">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.053207 -0.0017685 0.17119"
+        rpy="0 0 0" />
+      <mass
+        value="8.5783" />
+      <inertia
+        ixx="0.18676"
+        ixy="-8.7703E-06"
+        ixz="-0.030396"
+        iyy="0.26989"
+        iyz="-4.5158E-05"
+        izz="0.36686" />
+    </inertial>
+  </link>
+  <link
+    name="laser">
+    <inertial>
+      <origin
+        xyz="0.017587 0.00063659 0.015173"
+        rpy="0 0 0" />
+      <mass
+        value="0.06122" />
+      <inertia
+        ixx="1.6087E-05"
+        ixy="5.7536E-35"
+        ixz="1.3849E-20"
+        iyy="1.6087E-05"
+        iyz="-7.5282E-21"
+        izz="1.4813E-05" />
+    </inertial>
+  </link>
+  <joint
+    name="front_lidar_fixed_joint"
+    type="fixed">
+    <origin
+      xyz="0.35 0 0.116"
+      rpy="0 0 3.1416" />
+    <parent
+      link="base_link" />
+    <child
+      link="laser" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="rear_lidar">
+    <inertial>
+      <origin
+        xyz="0.010413 -0.00063659 0.015173"
+        rpy="0 0 0" />
+      <mass
+        value="0.06122" />
+      <inertia
+        ixx="1.6087E-05"
+        ixy="5.7536E-35"
+        ixz="-1.3849E-20"
+        iyy="1.6087E-05"
+        iyz="7.5282E-21"
+        izz="1.4813E-05" />
+    </inertial>
+  </link>
+  <joint
+    name="rear_lidar_fixed_joint"
+    type="fixed">
+    <origin
+      xyz="-0.35 0 0.116"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rear_lidar" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>

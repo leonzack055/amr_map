@@ -1,0 +1,15 @@
+cartographer/*
+
+!cartographer/cartographer/
+!cartographer/cmake/
+!cartographer/configuration_files
+!cartographer/docs
+!cartographer/scripts
+!cartographer/CMakeLists.txt
+!cartographer/cartographer-config.cmake.in
+!cartographer/package.xml
+!cartographer/README.md
+
+!cartographer/BUILD.bazel
+!cartographer/LICENSE
+!cartographer/WORKSPACE
