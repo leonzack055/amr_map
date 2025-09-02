@@ -31,20 +31,6 @@ def generate_launch_description():
     pkg_prefix = os.path.dirname(FindPackagePrefix('cartographer_ros').find('cartographer_ros'))
 
     ## ***** Nodes *****
-    pkg_share = FindPackageShare('cartographer_ros').find('cartographer_ros')
-    urdf_dir = os.path.join(pkg_share, 'urdf')
-    urdf_file = os.path.join(urdf_dir, 'byd_amr.urdf')
-    with open(urdf_file, 'r') as infp:
-        robot_desc = infp.read()
-    ## ***** Nodes *****
-    robot_state_publisher_node = Node(
-        package = 'robot_state_publisher',
-        executable = 'robot_state_publisher',
-        parameters=[
-            {'robot_description': robot_desc},
-            {'use_sim_time': True}],
-        output = 'screen'
-        )
     # 建图结束时将地图保存到install/map.pbstream中
     cartographer_node = Node(
         package = 'cartographer_ros',
@@ -52,11 +38,12 @@ def generate_launch_description():
         parameters = [{'use_sim_time': True}],
         arguments = [
             '-configuration_directory', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
-            '-configuration_basename', 'offline_bdy_amr2.lua',
-            '-save_state_filename', pkg_prefix+'/map.pbstream',
-            '--ros-args', '--log-level', 'warn'],
+            '-configuration_basename', 'offline_bdy_amr.lua',
+            '-save_state_filename', pkg_prefix+'/map.pbstream'],
         remappings = [
-            ('odom', '/odom_combined')],
+            ('scan', '/bcr_bot/scan'),
+            ('imu', '/bcr_bot/imu'),
+            ('odom', '/bcr_bot/odom')],
         output = 'screen'
         )
 
@@ -81,6 +68,5 @@ def generate_launch_description():
         # Nodes
         cartographer_node,
         cartographer_occupancy_grid_node,
-        robot_state_publisher_node,
         rviz_node,
     ])

@@ -14,6 +14,8 @@
   <depend>cartographer_ros</depend>
   <depend>cartographer_ros_msgs</depend>
   <depend>cartographer_rviz</depend>
+  <depend>cartographer_initializer_py</depend>
+  <depend>pose_interpolator</depend>
   <depend>eigen</depend>
   <depend>libabsl-dev</depend>
   <depend>pluginlib</depend>
