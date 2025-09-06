@@ -65,7 +65,7 @@ install(DIRECTORY launch
 )
 
 # 导出依赖
-ament_export_dependencies(rosidl_default_runtime)
-ament_export_include_directories(include ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp)
+# ament_export_dependencies(rosidl_default_runtime)
+# ament_export_include_directories(include ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp)
 
 ament_package()

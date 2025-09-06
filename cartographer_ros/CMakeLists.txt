@@ -42,8 +42,8 @@ if(EXISTS ${CARTOGRAPHER_INSTALL_DIR})
     set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${CARTOGRAPHER_INSTALL_DIR}")
     message(STATUS "已成功将 Cartographer 安装目录添加到搜索路径: ${CARTOGRAPHER_INSTALL_DIR}")
 else()
-    message(WARNING "未找到 Cartographer 安装目录: ${CARTOGRAPHER_INSTALL_DIR}")
-    message(WARNING "请确保 Cartographer 已正确安装，并更新路径配置")
+    message(STATUS "未找到 Cartographer 安装目录: ${CARTOGRAPHER_INSTALL_DIR}")
+    message(STATUS "请确保 Cartographer 已正确安装，并更新路径配置")
 endif()
 
 # 打印搜索路径信息
