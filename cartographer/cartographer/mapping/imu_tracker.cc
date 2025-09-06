@@ -43,20 +43,20 @@ void ImuTracker::Advance(const common::Time time) {
       transform::AngleAxisVectorToRotationQuaternion(
           Eigen::Vector3d(imu_angular_velocity_ * delta_t));
   orientation_ = (orientation_ * rotation).normalized();
+  // 去除打印重力INFO
+  // LOG(INFO) << "imu_angular_delta: " << (imu_angular_velocity_ * delta_t).x() << " " 
+  //   << (imu_angular_velocity_ * delta_t).y() << " " << (imu_angular_velocity_ * delta_t).z();
+  // auto rot_axis = transform::RotationQuaternionToAngleAxisVector(orientation_);
 
-  LOG(INFO) << "imu_angular_delta: " << (imu_angular_velocity_ * delta_t).x() << " " 
-    << (imu_angular_velocity_ * delta_t).y() << " " << (imu_angular_velocity_ * delta_t).z();
-  auto rot_axis = transform::RotationQuaternionToAngleAxisVector(orientation_);
-
-  LOG(INFO) << "Imu tracker rot_axis: " << rot_axis.x() << " " 
-    << rot_axis.y() << " " << rot_axis.z();
-  auto angle = rot_axis.norm();
-  LOG(INFO) << "Imu tracker angle: " << angle;
-  if(angle < 0.001) {
-    LOG(INFO) << "Imu tracker angle is small, shouldn't rotate";
-  }
-  LOG(INFO) << "Imu tracker orientation_: " << orientation_.x() << " " 
-    << orientation_.y() << " " << orientation_.z() << " " << orientation_.w();
+  // LOG(INFO) << "Imu tracker rot_axis: " << rot_axis.x() << " " 
+  //   << rot_axis.y() << " " << rot_axis.z();
+  // auto angle = rot_axis.norm();
+  // LOG(INFO) << "Imu tracker angle: " << angle;
+  // if(angle < 0.001) {
+  //   LOG(INFO) << "Imu tracker angle is small, shouldn't rotate";
+  // }
+  // LOG(INFO) << "Imu tracker orientation_: " << orientation_.x() << " " 
+  //   << orientation_.y() << " " << orientation_.z() << " " << orientation_.w();
   gravity_vector_ = rotation.conjugate() * gravity_vector_;
   time_ = time;
 }
@@ -71,10 +71,10 @@ void ImuTracker::AddImuLinearAccelerationObservation(
           : std::numeric_limits<double>::infinity();
   last_linear_acceleration_time_ = time_;
   const double alpha = 1. - std::exp(-delta_t / imu_gravity_time_constant_);
-  LOG(INFO)<< "gravity_vector_: " << gravity_vector_.x() << " " 
-    << gravity_vector_.y() << " " << gravity_vector_.z() << "和 加入进来的加速度: "
-    << imu_linear_acceleration.x() << " " << imu_linear_acceleration.y() << " "
-    << imu_linear_acceleration.z();
+  // LOG(INFO)<< "gravity_vector_: " << gravity_vector_.x() << " " 
+  //   << gravity_vector_.y() << " " << gravity_vector_.z() << "和 加入进来的加速度: "
+  //   << imu_linear_acceleration.x() << " " << imu_linear_acceleration.y() << " "
+  //   << imu_linear_acceleration.z();
   gravity_vector_ =
       (1. - alpha) * gravity_vector_ + alpha * imu_linear_acceleration;
   // Change the 'orientation_' so that it agrees with the current

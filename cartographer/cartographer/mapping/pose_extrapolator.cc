@@ -120,6 +120,7 @@ void PoseExtrapolator::AddOdometryData(
       common::ToSeconds(odometry_data_oldest.time - odometry_data_newest.time);
   const transform::Rigid3d odometry_pose_delta =
       odometry_data_newest.pose.inverse() * odometry_data_oldest.pose;
+      
   // TODO: 要保证里程计推算的角速度始终绕着Z轴，而且检查一下，这个RotationQuaternionToAngleAxisVector
   // 可能存在问题
   // auto rotation = odometry_pose_delta.rotation();
@@ -245,13 +246,13 @@ void PoseExtrapolator::AdvanceImuTracker(const common::Time time,
         odometry_data_.size() < 2 ? angular_velocity_from_poses_
                                   : angular_velocity_from_odometry_);
     // 打印imu_tracker的传入角速度
-    if(odometry_data_.size() < 2) {
-      LOG(INFO) << "以位姿推算角速度传入ImuTracker跟踪位姿朝向: vel-> " << angular_velocity_from_poses_.x() << 
-      " " << angular_velocity_from_poses_.y() << " " << angular_velocity_from_poses_.z();
-    } else {
-      LOG(INFO) << "以里程计推算角速度: vel-> " << angular_velocity_from_odometry_.x() << 
-      " " << angular_velocity_from_odometry_.y() << " " << angular_velocity_from_odometry_.z();
-    }
+    // if(odometry_data_.size() < 2) {
+    //   LOG(INFO) << "以位姿推算角速度传入ImuTracker跟踪位姿朝向: vel-> " << angular_velocity_from_poses_.x() << 
+    //   " " << angular_velocity_from_poses_.y() << " " << angular_velocity_from_poses_.z();
+    // } else {
+    //   LOG(INFO) << "以里程计推算角速度: vel-> " << angular_velocity_from_odometry_.x() << 
+    //   " " << angular_velocity_from_odometry_.y() << " " << angular_velocity_from_odometry_.z();
+    // }
 
     return;
   }
