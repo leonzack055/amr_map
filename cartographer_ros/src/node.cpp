@@ -112,8 +112,11 @@ Node::Node(
     metrics_registry_ = absl::make_unique<metrics::FamilyFactory>();
     carto::metrics::RegisterAllMetrics(metrics_registry_.get());
   }
+  landmark_poses_list_publisher_ =
+    node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
+    kLandmarkPosesListTopic, 10);
 #if defined(__arm__) || defined(_M_ARM) || defined(__aarch64__) || defined(_M_ARM64)
-  LOG(WARNING) << "架构类别: ARM 系列, 使用定位代码只进行TrackedPose定位信息发布";
+  LOG(WARNING) << "架构类别: ARM 系列, 使用定位代码只进行TrackedPose和landmark定位信息发布";
 #elif defined(__i386__) || defined(__x86_64__)
   submap_list_publisher_ =
     node_->create_publisher<::cartographer_ros_msgs::msg::SubmapList>(
@@ -121,9 +124,6 @@ Node::Node(
   trajectory_node_list_publisher_ =
     node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
     kTrajectoryNodeListTopic, 10);
-  landmark_poses_list_publisher_ =
-    node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
-    kLandmarkPosesListTopic, 10);
   constraint_list_publisher_ =
     node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
     kConstraintListTopic, 10);
