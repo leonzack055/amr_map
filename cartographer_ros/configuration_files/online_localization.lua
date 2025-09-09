@@ -118,6 +118,6 @@ POSE_GRAPH.matcher_rotation_weight = 2e5
 POSE_GRAPH.optimization_problem.log_solver_summary = false
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 POSE_GRAPH.optimize_every_n_nodes = 5
-POSE_GRAPH.global_constraint_search_after_n_seconds = 100
+POSE_GRAPH.global_constraint_search_after_n_seconds = 10
 
 return options
