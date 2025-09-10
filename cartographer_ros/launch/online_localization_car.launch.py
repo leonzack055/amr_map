@@ -104,13 +104,10 @@ def generate_launch_description():
         load_state_filename_arg,
         cartographer_node,
         TimerAction(
-            period=5.0,
+            period=3.0,
             actions=[initializer_node]
             ),
-        TimerAction(
-            period=5.0,
-            actions=[pose_interpolator_node]
-            ),   
+        pose_interpolator_node,   
         # 主节点立即启动
         cartographer_occupancy_grid_node
         
