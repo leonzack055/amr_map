@@ -38,12 +38,11 @@ def generate_launch_description():
         parameters = [{'use_sim_time': True}],
         arguments = [
             '-configuration_directory', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
-            '-configuration_basename', 'offline_bdy_amr.lua',
-            '-save_state_filename', pkg_prefix+'/map.pbstream'],
+            '-configuration_basename', 'online_byd_landmark.lua',
+            '-save_state_filename', pkg_prefix+'/map.pbstream',
+            '--ros-args', '--log-level', 'info'],
         remappings = [
-            ('scan', '/bcr_bot/scan'),
-            ('imu', '/bcr_bot/imu'),
-            ('odom', '/bcr_bot/odom')],
+            ('odom', '/odom_combined'),],
         output = 'screen'
         )
 
