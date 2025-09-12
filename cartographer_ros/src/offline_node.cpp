@@ -374,6 +374,7 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
         laser_scan_serializer.deserialize_message(&serialized_msg, laser_scan_msg.get());
         node.HandleLaserScanMessage(trajectory_id, sensor_id,
                                      laser_scan_msg);
+        // TODO: landmark检测器，进和检测； landmark检测器，进行landmark的参数的获取
       } else if (topic_type == "sensor_msgs/msg/MultiEchoLaserScan") {
         rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
         sensor_msgs::msg::MultiEchoLaserScan::SharedPtr multi_echo_laser_scan_msg =

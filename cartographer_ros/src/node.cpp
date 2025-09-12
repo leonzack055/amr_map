@@ -1000,8 +1000,8 @@ void Node::HandleLaserScanMessage(
     // 输出时间间隔（毫秒级）
     int64_t interval_ms = interval.nanoseconds() / 1000000;  // 纳秒→毫秒
     last_receive_laserscan_stamps_[sensor_id] = current_time;
-    LOG(INFO)<<  "Trajectory 激光传感器" << sensor_id << 
-          "前后接受消息时间间隔:" << interval_ms << " 毫秒 ";
+    // LOG(INFO)<<  "Trajectory 激光传感器" << sensor_id << 
+    //       "前后接受消息时间间隔:" << interval_ms << " 毫秒 ";
   }
   absl::MutexLock lock(&mutex_);
   if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {

@@ -22,13 +22,12 @@ options = {
   tracking_frame = "base_link",
   published_frame = "base_link",
   odom_frame = "odom",
-  provide_odom_frame = true,
-  provide_odom_frame = true,
+  provide_odom_frame = false,
   publish_frame_projected_to_2d = false,
-  use_odometry = false,
+  use_odometry = true,
   use_pose_extrapolator = true,
   use_nav_sat = false,
-  use_landmarks = false,
+  use_landmarks = true,
   num_laser_scans = 1,
   num_multi_echo_laser_scans = 0,
   num_subdivisions_per_laser_scan = 1,
@@ -43,8 +42,8 @@ options = {
   imu_sampling_ratio = 1.,
   landmarks_sampling_ratio = 1.,
   -- 发布tracking_frame->map的坐标，tf默认是发布的但有风险
-  publish_tracked_pose = false,
-  publish_to_tf = false,
+  publish_tracked_pose = true,
+  publish_to_tf = true,
 }
 
 MAP_BUILDER.use_trajectory_builder_2d = true
@@ -63,7 +62,8 @@ TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_in
 TRAJECTORY_BUILDER_2D.min_range = 0.5
 TRAJECTORY_BUILDER_2D.max_range = 25.
 -- wheel odometry is fine
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 20
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 1e1
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 30
 -- IMU is ok
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 20
 

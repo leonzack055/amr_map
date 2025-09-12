@@ -166,8 +166,8 @@ void SensorBridge::HandleLaserScanMessage(
   std::chrono::duration<double, std::milli> duration2 = end2 - end1;  // 毫秒级
   double count_ms2 = duration2.count();
   double count_ms1 = duration1.count();
-  LOG(INFO) << "## SensorBridge进行 点云转换耗时"<< count_ms1 << 
-        " ms HandleLaserScan 匹配 耗时: " << count_ms2 << " ms";
+  // LOG(INFO) << "## SensorBridge进行 点云转换耗时"<< count_ms1 << 
+  //       " ms HandleLaserScan 匹配 耗时: " << count_ms2 << " ms";
 }
 
 void SensorBridge::HandleMultiEchoLaserScanMessage(
