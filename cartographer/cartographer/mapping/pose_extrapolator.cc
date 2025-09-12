@@ -137,8 +137,8 @@ void PoseExtrapolator::AddOdometryData(
   
 
   // 打印里程计推算的角速度
-  LOG_EVERY_N(INFO, 25) << "里程计推算的角速度 angular_velocity_from_odometry_: x: " << angular_velocity_from_odometry_.x()
-  << "y: " << angular_velocity_from_odometry_.y() << "z: " << angular_velocity_from_odometry_.z();
+  // LOG_EVERY_N(INFO, 25) << "里程计推算的角速度 angular_velocity_from_odometry_: x: " << angular_velocity_from_odometry_.x()
+  // << "y: " << angular_velocity_from_odometry_.y() << "z: " << angular_velocity_from_odometry_.z();
   // // 强制将轴角变化为当前z轴旋转, 取消角速度修正
   // Eigen::Vector3d anglue_velocity_unitAxis = angular_velocity_from_odometry_.normalized();
   // double rotation_angle = angular_velocity_from_odometry_.norm();

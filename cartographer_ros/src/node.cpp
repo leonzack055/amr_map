@@ -447,8 +447,8 @@ void Node::PublishLocalTrajectoryData()
           // 输出时间间隔（毫秒级）
           int64_t interval_ms = interval.nanoseconds() / 1000000;  // 纳秒→毫秒
           last_publish_stamps_[entry.first] = current_time;
-          LOG(INFO) <<  "Trajectory " << entry.first << 
-                "发布消息时间间隔:" << interval_ms << " 毫秒 ";
+          // LOG(INFO) <<  "Trajectory " << entry.first << 
+          //       "发布消息时间间隔:" << interval_ms << " 毫秒 ";
         }
       }
     } else {
@@ -1013,8 +1013,8 @@ void Node::HandleLaserScanMessage(
   rclcpp::Duration interval = current_end_time - current_time;
   // 输出时间间隔（毫秒级）
   int64_t inter_ms = interval.nanoseconds() / 1000000;  // 纳秒→毫秒
-  LOG(INFO)<<  "HandleLaserScanMessage " << sensor_id << 
-        "处理需要:" << inter_ms << " 毫秒 ";
+  // LOG(INFO)<<  "HandleLaserScanMessage " << sensor_id << 
+  //       "处理需要:" << inter_ms << " 毫秒 ";
 }
 
 void Node::HandleMultiEchoLaserScanMessage(

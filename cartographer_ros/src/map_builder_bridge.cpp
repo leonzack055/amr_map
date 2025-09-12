@@ -392,9 +392,14 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetLandmarkPosesList(
   const std::map<std::string, Rigid3d> landmark_poses =
       map_builder_->pose_graph()->GetLandmarkPoses();
   for (const auto& id_to_pose : landmark_poses) {
+    // landmark_poses_list.markers.push_back(CreateLandmarkMarker(
+    //     GetLandmarkIndex(id_to_pose.first, &landmark_to_index_),
+    //     id_to_pose.second, node_options_.map_frame, node_time));
+
+    // TODO: 修改使用landmark 的string to int 作为索引
     landmark_poses_list.markers.push_back(CreateLandmarkMarker(
-        GetLandmarkIndex(id_to_pose.first, &landmark_to_index_),
-        id_to_pose.second, node_options_.map_frame, node_time));
+    std::stoi(id_to_pose.first),
+    id_to_pose.second, node_options_.map_frame, node_time));
   }
   return landmark_poses_list;
 }

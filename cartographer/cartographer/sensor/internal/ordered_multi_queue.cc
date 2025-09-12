@@ -75,8 +75,8 @@ void OrderedMultiQueue::Add(const QueueKey& queue_key,
   auto end = std::chrono::steady_clock::now();
   std::chrono::duration<double, std::milli> duration = end - start;  // 毫秒级
   double count_ms = duration.count();
-  LOG_EVERY_N(INFO, 50) << "## OrderedMultiQueue Dispatch " << sensor_id << " executed in " 
-            << count_ms << " ms";
+  // LOG_EVERY_N(INFO, 50) << "## OrderedMultiQueue Dispatch " << sensor_id << " executed in " 
+  //           << count_ms << " ms";
 }
 
 void OrderedMultiQueue::Flush() {

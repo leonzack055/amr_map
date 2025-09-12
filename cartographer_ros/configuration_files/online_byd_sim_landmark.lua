@@ -74,8 +74,8 @@ POSE_GRAPH.constraint_builder.min_score = 0.65
 POSE_GRAPH.optimization_problem.acceleration_weight = 0.1 * 1e3
 POSE_GRAPH.optimization_problem.rotation_weight = 0.1 * 3e5
 -- ignore wheels in optimization
-POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e5
-POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e5
+POSE_GRAPH.optimization_problem.odometry_translation_weight = 0
+POSE_GRAPH.optimization_problem.odometry_rotation_weight = 0
 -- optimization problem setting
 POSE_GRAPH.optimization_problem.log_solver_summary = true
 POSE_GRAPH.optimization_problem.huber_scale = 1e2

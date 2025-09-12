@@ -111,7 +111,8 @@ void AddLandmarkCostFunctions(
     const MapById<NodeId, NodeSpec2D>& node_data,
     MapById<NodeId, std::array<double, 3>>* C_nodes,
     std::map<std::string, CeresPose>* C_landmarks, ceres::Problem* problem,
-    double huber_scale) {
+    double huber_scale,
+    std::map<std::string, transform::Rigid3d>& last_optimize_landmark_data) {
   for (const auto& landmark_node : landmark_nodes) {
     for (const auto& observation : landmark_node.second.landmark_observations) {
       const std::string& landmark_id = landmark_node.first;
@@ -142,6 +143,8 @@ void AddLandmarkCostFunctions(
                 ? landmark_node.second.global_landmark_pose.value()
                 : GetInitialLandmarkPose(observation, prev->data, next->data,
                                          *prev_node_pose, *next_node_pose);
+        // 计录landmark优化前位姿
+        last_optimize_landmark_data[landmark_id] = starting_point;
 #if CERES_VERSION_MAJOR > 2 || CERES_VERSION_MAJOR == 2 && CERES_VERSION_MINOR >= 1
         C_landmarks->emplace(
             landmark_id,
@@ -306,7 +309,7 @@ void OptimizationProblem2D::Solve(
   }
   // Add cost functions for landmarks.
   AddLandmarkCostFunctions(landmark_nodes, node_data_, &C_nodes, &C_landmarks,
-                           &problem, options_.huber_scale());
+                           &problem, options_.huber_scale(), last_optimize_landmark_data_);
   // Add penalties for violating odometry or changes between consecutive nodes
   // if odometry is not available.
   for (auto node_it = node_data_.begin(); node_it != node_data_.end();) {
@@ -432,6 +435,9 @@ void OptimizationProblem2D::Solve(
   }
   for (const auto& C_landmark : C_landmarks) {
     landmark_data_[C_landmark.first] = C_landmark.second.ToRigid();
+    auto delta = last_optimize_landmark_data_[C_landmark.first].inverse() * landmark_data_[C_landmark.first];
+    LOG(INFO) << "landmar " << C_landmark.first << " 更新变化 delta: " 
+    << delta.translation().norm() << " " << cartographer::transform::GetYaw(delta);
   }
 }
 
