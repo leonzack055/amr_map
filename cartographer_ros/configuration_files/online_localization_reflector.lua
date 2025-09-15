@@ -82,7 +82,7 @@ TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.15
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 150
 TRAJECTORY_BUILDER_2D.min_range = 0.3
 TRAJECTORY_BUILDER_2D.max_range = 15.
-TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.
+TRAJECTORY_BUILDER_2D.missing_data_ray_length = 0.1
 
 -- 优化全局约束定位参数
 POSE_GRAPH.constraint_builder.max_constraint_distance = 5.
