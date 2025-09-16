@@ -32,6 +32,7 @@ options = {
   landmarks_sampling_ratio = 1., 
   -- 发布tracking_frame->map的坐标，tf默认是发布的但有风险
   publish_tracked_pose = true,
+  publish_to_tf = true,
 }
 
 MAP_BUILDER.use_trajectory_builder_2d = true
