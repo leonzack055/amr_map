@@ -1,6 +1,7 @@
 #include "cartographer_ros/ros_map.h"
 #include "google/protobuf/util/json_util.h"
 #include "cartographer_ros/message_map.pb.h"  // 引入protobuf头文件
+#include "cartographer/io/proto_stream.h"
 #include <fstream>
 #include <vector>
 
@@ -15,16 +16,53 @@ namespace cartographer_ros {
  * @param origin 相对于`map_frame`的坐标，图像坐下角坐标
  */
 void WritePgm(const ::cartographer::io::Image& image, const double resolution,
-              ::cartographer::io::FileWriter* file_writer, const Eigen::Vector2d& origin) {
+              ::cartographer::io::FileWriter* file_writer, const Eigen::Vector2d& origin, 
+              const std::string& pbstream_path) {
    const std::string header =
       "P5\n# Cartographer map; " + std::to_string(resolution) + " m/pixel\n" +
       std::to_string(image.width()) + " " + std::to_string(image.height()) + "\n255\n";
   file_writer->Write(header.data(), header.size());
   
+  std::string pbstream_file;
+  const std::string suffix = ".pbstream";
+  if (pbstream_path.size() >= suffix.size()) {
+      // 比较路径末尾与后缀是否相同
+      if (std::equal(suffix.rbegin(), suffix.rend(), pbstream_path.rbegin())) {
+          // 已包含.pbstream后缀，直接赋值
+          pbstream_file = pbstream_path;
+      } else {
+          // 不包含后缀，添加后赋值
+          pbstream_file = pbstream_path + suffix;
+      }
+  } else {
+      // 路径长度短于后缀，直接添加后缀
+      pbstream_file = pbstream_path + suffix;
+  }
+
+  // 创建ProtoStreamReader读取pbstream文件
+  cartographer::io::ProtoStreamReader reader(pbstream_file);
+  
+  // 创建反序列化器
+  cartographer::io::ProtoStreamDeserializer deserializer(&reader);
+
+  // 获取pose graph数据
+  cartographer::mapping::proto::PoseGraph pose_graph_proto = deserializer.pose_graph();
+
+  // 收集反光板数据
+  std::vector<rbk::protocol::Message_MapRSSIPos> landmark_rssi_pos_list;
+  // 遍历所有的landmark poses
+  for (const auto& landmark : pose_graph_proto.landmark_poses()) {
+    rbk::protocol::Message_MapRSSIPos rssi_pos;
+    // 提取全局位姿信息
+    const auto& global_pose = landmark.global_pose();
+    rssi_pos.set_x(global_pose.translation().x());
+    rssi_pos.set_y(global_pose.translation().y());
+    landmark_rssi_pos_list.push_back(rssi_pos);
+  }
+
   // 收集符合条件的像素点
   std::vector<rbk::protocol::Message_MapPos> valid_points;
   const int pixel_threshold = 50;  // 像素阈值，可根据需要调整
-  
   for (int y = 0; y < image.height(); ++y) {
     for (int x = 0; x < image.width(); ++x) {
       const char color = image.GetPixel(x, y)[0];
@@ -54,7 +92,7 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
   }
   
   // 调用函数生成smap文件
-  PbstreamToSmap(image, resolution, origin, smap_filename, valid_points);
+  PbstreamToSmap(image, resolution, origin, smap_filename, valid_points, landmark_rssi_pos_list);
 }
 
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
@@ -72,7 +110,8 @@ void PbstreamToSmap(const ::cartographer::io::Image& image,
                    double resolution, 
                    const Eigen::Vector2d& origin, 
                    const std::string& smap_filename,
-                   const std::vector<rbk::protocol::Message_MapPos>& valid_points) {
+                   const std::vector<rbk::protocol::Message_MapPos>& valid_points,
+                   const std::vector<rbk::protocol::Message_MapRSSIPos>& landmark_rssi_pos_list) {
   // 创建地图消息对象
   rbk::protocol::Message_Map map;
 
@@ -126,7 +165,9 @@ void PbstreamToSmap(const ::cartographer::io::Image& image,
   for (const auto& pos : valid_points) {
     *map.add_normalposlist() = pos;
   }
-  
+  for (const auto& rssi_pos : landmark_rssi_pos_list) {
+    *map.add_rssiposlist() = rssi_pos;
+  }
   // 将protobuf消息转换为JSON
   std::string json_string;
   google::protobuf::util::JsonPrintOptions options;

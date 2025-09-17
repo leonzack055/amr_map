@@ -67,13 +67,13 @@ RosMapWritingPointsProcessor::Flush() {
     const std::string pgm_filename = pgm_writer->GetFilename();
     const auto& limits = probability_grid_.limits();
     image->Rotate90DegreesClockwise();
-
+    const std::string state_output_filename = filestem_;
     const Eigen::Vector2d origin(
         limits.max().x() - (offset.y() + image->width()) * limits.resolution(),
         limits.max().y() -
             (offset.x() + image->height()) * limits.resolution());
 
-    WritePgm(*image, limits.resolution(), pgm_writer.get(), origin);
+    WritePgm(*image, limits.resolution(), pgm_writer.get(), origin, state_output_filename);
     CHECK(pgm_writer->Close());
 
     auto yaml_writer = file_writer_factory_(filestem_ + ".yaml");

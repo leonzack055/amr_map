@@ -61,7 +61,7 @@ void Run(const std::string& pbstream_filename, const std::string& map_filestem,
       -result.origin.x() * resolution,
       (result.origin.y() - image.height()) * resolution);
 
-  WritePgm(image, resolution, &pgm_writer, origin);
+  WritePgm(image, resolution, &pgm_writer, origin, pbstream_filename);
   
   ::cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
   WriteYaml(resolution, origin, pgm_writer.GetFilename(), &yaml_writer);

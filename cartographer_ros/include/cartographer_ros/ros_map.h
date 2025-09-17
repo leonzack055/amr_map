@@ -24,13 +24,18 @@
 #include "cartographer/io/image.h"
 #include "cartographer/mapping/2d/map_limits.h"
 #include "message_map.pb.h"  // 引入protobuf头文件
+#include "cartographer/io/proto_stream_deserializer.h"
+#include "cartographer/mapping/pose_graph_interface.h"
+#include "cartographer/mapping/proto/pose_graph.pb.h"
+// #include "cartographer/mapping/pose_graph.h"
 
 namespace cartographer_ros {
 
 // Write 'image' as a pgm into 'file_writer'. The resolution is used in the
 // comment only'
 void WritePgm(const ::cartographer::io::Image& image, const double resolution,
-              ::cartographer::io::FileWriter* file_writer, const Eigen::Vector2d& origin);
+              ::cartographer::io::FileWriter* file_writer, const Eigen::Vector2d& origin,
+              const std::string& pbstream_path);
 
 // Write the corresponding yaml into 'file_writer'.
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
@@ -42,7 +47,8 @@ void PbstreamToSmap(const ::cartographer::io::Image& image,
                    double resolution, 
                    const Eigen::Vector2d& origin, 
                    const std::string& smap_filename,
-                   const std::vector<rbk::protocol::Message_MapPos>& valid_points);
+                   const std::vector<rbk::protocol::Message_MapPos>& valid_points,
+                   const std::vector<rbk::protocol::Message_MapRSSIPos>& landmark_rssi_pos_list);
 
 }  // namespace cartographer_ros
 #endif  // CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ROS_MAP_H

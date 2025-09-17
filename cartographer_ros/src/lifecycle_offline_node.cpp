@@ -753,7 +753,7 @@ LifecycleOfflineCartoNode::on_activate(const rclcpp_lifecycle::State & state)
           -result.origin.x() * resolution_,
           (result.origin.y() - image.height()) * resolution_);
 
-        WritePgm(image, resolution_, &pgm_writer, origin);
+        WritePgm(image, resolution_, &pgm_writer, origin, state_output_filename);
 
         cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
         WriteYaml(resolution_, origin, pgm_writer.GetFilename(), &yaml_writer);
