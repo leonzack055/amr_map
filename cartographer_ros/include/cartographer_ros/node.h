@@ -49,6 +49,7 @@
 #include <sensor_msgs/msg/multi_echo_laser_scan.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -95,6 +96,10 @@ class Node {
           expected_sensor_ids,
       const TrajectoryOptions& options);
 
+  // 监听/initialpose话题，用于rviz初始化定位
+  void HandleInitialPoseMessage(const int trajectory_id, const std::string & topic_name,
+    const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr& msg);
+
   // The following functions handle adding sensor data to a trajectory.
   void HandleOdometryMessage(int trajectory_id, const std::string& sensor_id,
                              const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
@@ -133,6 +138,9 @@ class Node {
     // unique identifier of a subscriber, we remember it ourselves.
     std::string topic;
   };
+
+  TrajectoryOptions trajectory_options_;
+  bool finish_first_optimization_ = false;
 
   bool handleSubmapQuery(
       const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr request,

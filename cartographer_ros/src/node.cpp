@@ -284,6 +284,20 @@ void Node::AddSensorSamplers(
 void Node::PublishLocalTrajectoryData()
 {
   absl::MutexLock lock(&mutex_);
+
+  if(trajectory_options_.trajectory_builder_options.has_pure_localization_trimmer()
+    && !finish_first_optimization_) {
+    if(map_builder_bridge_->GetLocalTrajectoryData().empty()) {
+      LOG(WARNING) << "纯定位模式下，GetLocalTrajectoryData为空，没有完成初始优化!!";
+      return;
+    }
+    // 纯定位模式，进行优化定位
+    map_builder_bridge_->RunFinalOptimization();
+    finish_first_optimization_ = true;
+    map_builder_bridge_->RunFinalOptimization();
+    LOG(WARNING) << "纯定位模式下，完成初始位姿优化！！";
+  }
+
   for (const auto & entry : map_builder_bridge_->GetLocalTrajectoryData()) {
     // auto start = std::chrono::steady_clock::now();
     const auto & trajectory_data = entry.second;
@@ -595,6 +609,13 @@ void Node::LaunchSubscribers(
         kImuTopic});
   }
 
+  // 创建/intialpose监听
+  subscribers_[trajectory_id].push_back(
+      {SubscribeWithHandler<geometry_msgs::msg::PoseWithCovarianceStamped>(
+          &Node::HandleInitialPoseMessage, trajectory_id, "initialpose", node_,
+          this),
+        "initialpose"});
+
   if (options.use_odometry) {
     subscribers_[trajectory_id].push_back(
       {SubscribeWithHandler<nav_msgs::msg::Odometry>(
@@ -771,6 +792,8 @@ void Node::StartTrajectoryWithDefaultTopics(const TrajectoryOptions & options)
 {
   absl::MutexLock lock(&mutex_);
   CHECK(ValidateTrajectoryOptions(options));
+  // Add: 使用默认的trajectory_options进行创建轨迹
+  trajectory_options_ = options;
   AddTrajectory(options);
 }
 
@@ -930,6 +953,54 @@ void Node::RunFinalOptimization()
   map_builder_bridge_->RunFinalOptimization();
 }
 
+// 初始化定位，将rviz中的pose设置为cartographer中的pose
+void Node::HandleInitialPoseMessage(const int trajectory_id, const std::string & topic_name,
+  const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr& msg)
+{
+  finish_first_optimization_ = false;
+  // 初始化定位，将rviz中的pose设置为cartographer中的pose
+  auto trajectory_states = map_builder_bridge_->GetTrajectoryStates();
+  for(const auto& entry : trajectory_states)
+  {
+    if(entry.first != 0)
+    {
+      FinishTrajectory(entry.first);
+    }
+  }
+  // 初始化定位，将rviz中的pose设置为cartographer中的pose
+  const auto init_global_pose = ToRigid3d(msg->pose.pose);
+  if (!init_global_pose.IsValid()) {
+    std::string message =
+      "/initialpose 参数错误， 请检查rviz中的pose是否正确";
+    LOG(ERROR) << message << init_global_pose;
+    return;
+  }
+
+  int relative_to_trajectory_id = 0; // 默认只有一个子地图为 trajectory_0,为0坐标原点
+
+  ::cartographer::mapping::proto::InitialTrajectoryPose initial_trajectory_pose;
+  cartographer_ros::TrajectoryOptions trajectory_options = trajectory_options_;
+  initial_trajectory_pose.set_to_trajectory_id(relative_to_trajectory_id);
+  *initial_trajectory_pose.mutable_relative_pose() =
+    cartographer::transform::ToProto(init_global_pose);
+  initial_trajectory_pose.set_timestamp(
+    cartographer::common::ToUniversal(
+      ::cartographer_ros::FromRos(rclcpp::Time(0))));
+  *trajectory_options.trajectory_builder_options.mutable_initial_trajectory_pose() = initial_trajectory_pose;
+
+  if (!ValidateTrajectoryOptions(trajectory_options)) {
+    std::string err_message = "Invalid trajectory options. 传入的轨迹参数失效！！";
+    LOG(ERROR) << err_message;
+  } else if (!ValidateTopicNames(trajectory_options)) {
+    std::string err_message = "Topics are already used by another trajectory. 话题名已被其他轨迹使用！！";
+    LOG(ERROR) << err_message;
+  } else {
+    AddTrajectory(trajectory_options);
+    std::string err_message = "%-0=0-% 创建新的轨迹成功！！";
+    LOG(ERROR) << err_message;
+  }
+}
+
 void Node::HandleOdometryMessage(
   const int trajectory_id, const std::string & sensor_id,
   const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
@@ -1057,6 +1128,9 @@ void Node::LoadState(
 {
   absl::MutexLock lock(&mutex_);
   map_builder_bridge_->LoadState(state_filename, load_frozen_state);
+  // TODO: posegraph->constraint_builder->DispatchScanMatcherConstruction()
+  // 进行submap的创建
+  // 等待posegraph->constraint_builder 队列全部执行结束，表示扩展submap完成
 }
 
 // TODO: find ROS equivalent to ros::master::getTopics

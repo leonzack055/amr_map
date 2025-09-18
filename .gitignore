@@ -13,3 +13,5 @@ cartographer/*
 !cartographer/BUILD.bazel
 !cartographer/LICENSE
 !cartographer/WORKSPACE
+# ignore .pyc cache
+*.pyc
