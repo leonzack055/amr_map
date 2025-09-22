@@ -16,7 +16,7 @@
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, LogInfo, IncludeLaunchDescription, ExecuteProcess
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetRemap
@@ -30,6 +30,25 @@ def generate_launch_description():
     pkg_share = FindPackageShare('cartographer_ros').find('cartographer_ros')
     pkg_prefix = os.path.dirname(FindPackagePrefix('cartographer_ros').find('cartographer_ros'))
 
+    urdf_dir = os.path.join(pkg_share, 'urdf')
+    urdf_file = os.path.join(urdf_dir, 'byd_amr.urdf')
+    with open(urdf_file, 'r') as infp:
+        robot_desc = infp.read()
+    # 是否使用 robot_state_publisher 节点
+    use_urdf = LaunchConfiguration('use_urdf')
+    declear_use_urdf = DeclareLaunchArgument(
+        'use_urdf',
+        default_value='True',
+        description='Bag包运行时使用自定义开启自定义urdf')
+    robot_state_publisher_node = Node(
+        package = 'robot_state_publisher',
+        executable = 'robot_state_publisher',
+        parameters=[
+            {'robot_description': robot_desc},
+            {'use_sim_time': True}],
+        condition=IfCondition(use_urdf),
+        output = 'log'
+        )
     ## ***** Nodes *****
     # 建图结束时将地图保存到install/map.pbstream中
     cartographer_node = Node(
@@ -64,6 +83,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         # Launch arguments
+        declear_use_urdf,
+        LogInfo(msg=[LaunchConfiguration('use_urdf')]),
+        robot_state_publisher_node,
         # Nodes
         cartographer_node,
         cartographer_occupancy_grid_node,
