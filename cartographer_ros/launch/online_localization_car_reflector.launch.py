@@ -102,10 +102,13 @@ def generate_launch_description():
         configuration_directory_arg,
         configuration_basename_arg,
         load_state_filename_arg,
-        initializer_node,
-        pose_interpolator_node,   
-        # 主节点立即启动
         cartographer_node,
+        pose_interpolator_node,
+        TimerAction(
+            period=3.0,
+            actions=[initializer_node]
+            ),
+        # 主节点立即启动
         cartographer_occupancy_grid_node
         
     ])
