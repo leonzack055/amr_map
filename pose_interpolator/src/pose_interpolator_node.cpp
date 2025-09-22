@@ -11,7 +11,11 @@ PoseInterpolator::PoseInterpolator()
   data_valid_(false),
   qr_pose_active_(false),
   current_relocate_state_(0) {  // 初始化为0
+
+  last_qr_pose_time_ = this->now();  // 初始化为节点启动时间
   
+  tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+
   // Parameters
   this->declare_parameter("output_frequency", 50.0);
   double frequency = this->get_parameter("output_frequency").as_double();
@@ -52,19 +56,16 @@ PoseInterpolator::PoseInterpolator()
 
 void PoseInterpolator::relocate_state_callback(
   const std_msgs::msg::UInt8::SharedPtr msg) {
-  std::lock_guard<std::mutex> lock(mutex_);
   current_relocate_state_ = msg->data;
   RCLCPP_INFO(this->get_logger(), "收到重定位状态: %d", current_relocate_state_);
 }
 
 void PoseInterpolator::tracked_pose_callback(
   const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-  
-  std::lock_guard<std::mutex> lock(mutex_);
-  
-  if (qr_pose_active_) {
-    return;
-  }
+    
+  // if (qr_pose_active_) {
+  //   return;
+  // }
   
   // Update reference data
   last_tracked_pose_ = *msg;
@@ -79,48 +80,40 @@ void PoseInterpolator::tracked_pose_callback(
 
 void PoseInterpolator::qr_pose_callback(
   const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-  
-  std::lock_guard<std::mutex> lock(mutex_);
-  
+  if (qr_pose_active_ && (this->now() - last_qr_pose_time_ > qr_timeout_)) {
+    qr_pose_active_ = false;
+    RCLCPP_WARN(this->get_logger(), "QR pose timed out, deactivating");
+  }
   qr_pose_active_ = true;
   last_qr_pose_ = *msg;
-  
-  // 创建并发布GlobalPose消息
-  auto global_msg = amr_ros_msg::msg::GlobalPose();
-  global_msg.global_pose = *msg;
-  global_msg.global_pose.header.stamp = this->now();  // 更新时间戳
-  global_msg.relocate_state = current_relocate_state_;  // 使用当前状态值
-  global_pose_pub_->publish(global_msg);
-  
-  RCLCPP_INFO(this->get_logger(), "Switched to QR pose source");
+  last_qr_pose_time_ = this->now();  // 更新时间戳
 }
 
 void PoseInterpolator::odom_callback(
-  const nav_msgs::msg::Odometry::SharedPtr msg) {
-  
-  std::lock_guard<std::mutex> lock(mutex_);
-  
-  if (qr_pose_active_) {
-    return;
-  }
+  const nav_msgs::msg::Odometry::SharedPtr msg) {  
+  // if (qr_pose_active_) {
+  //   return;
+  // }
   
   last_odom_ = *msg;
 }
 
-void PoseInterpolator::timer_callback() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  
+void PoseInterpolator::timer_callback() {  
+
+  if (qr_pose_active_ && (this->now() - last_qr_pose_time_ > qr_timeout_)) {
+    qr_pose_active_ = false;
+  }
+
   if (qr_pose_active_) {
-    // 创建并发布GlobalPose消息
-    auto global_msg = amr_ros_msg::msg::GlobalPose();
-    global_msg.global_pose = last_qr_pose_;
-    global_msg.global_pose.header.stamp = this->now();  // 更新时间戳
-    global_msg.relocate_state = current_relocate_state_;  // 使用当前状态值
-    global_pose_pub_->publish(global_msg);
-    return;
+    last_tracked_pose_= last_qr_pose_;
+    last_tracked_pose_time_ = last_qr_pose_.header.stamp;
+    if (last_odom_.header.stamp.sec != 0) {
+      ref_odom_ = last_odom_;
+      ref_odom_initialized_ = true;
+      data_valid_ = true;
+    }
   }
   
-  // 以下为原始插值逻辑
   if (!data_valid_ || !ref_odom_initialized_) {
     return;
   }
@@ -131,31 +124,72 @@ void PoseInterpolator::timer_callback() {
   if (dt < 0.02) {
     return;
   }
-  
+  // RCLCPP_WARN(this->get_logger(), "its going on ");
   try {
-    geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-      last_tracked_pose_.header.frame_id,
-      ref_odom_.header.frame_id,
-      tf2::TimePointZero);
-    
-    Eigen::Isometry3d T_map_odom = tf2::transformToEigen(transform.transform);
-    Eigen::Isometry3d T_odom_base_ref = pose_to_eigen(ref_odom_.pose.pose);
-    Eigen::Isometry3d T_odom_base_current = pose_to_eigen(last_odom_.pose.pose);
-    
-    Eigen::Isometry3d T_ref_current = T_odom_base_ref.inverse() * T_odom_base_current;
-    
-    Eigen::Isometry3d T_map_base_ref = pose_to_eigen(last_tracked_pose_.pose);
-    Eigen::Isometry3d T_map_base_current = T_map_base_ref * T_map_odom * T_ref_current * T_map_odom.inverse();
-    
-    // 创建GlobalPose消息
-    auto global_msg = amr_ros_msg::msg::GlobalPose();
-    global_msg.global_pose.header.stamp = now;
-    global_msg.global_pose.header.frame_id = last_tracked_pose_.header.frame_id;
-    global_msg.global_pose.pose = eigen_to_pose(T_map_base_current);
-    global_msg.relocate_state = current_relocate_state_;  // 使用当前状态值
-    
-    // Publish
-    global_pose_pub_->publish(global_msg);
+    if (qr_pose_active_) {
+      // 直接使用QR位姿和里程计数据计算变换
+      Eigen::Isometry3d T_map_qr_base_ref = pose_to_eigen(last_qr_pose_.pose);
+      Eigen::Isometry3d T_odom_base_ref = pose_to_eigen(ref_odom_.pose.pose);
+      Eigen::Isometry3d T_odom_base_current = pose_to_eigen(last_odom_.pose.pose);
+      
+      Eigen::Isometry3d T_ref_current = T_odom_base_ref.inverse() * T_odom_base_current;
+      
+      Eigen::Isometry3d T_map_qr_base_current = T_map_qr_base_ref * T_ref_current;
+      
+      // 创建GlobalPose消息
+      auto global_msg = amr_ros_msg::msg::GlobalPose();
+      global_msg.global_pose.header.stamp = now;
+      global_msg.global_pose.header.frame_id = "map_qr";
+      global_msg.global_pose.pose = eigen_to_pose(T_map_qr_base_current);
+      global_msg.relocate_state = current_relocate_state_;
+      
+      // Publish
+      global_pose_pub_->publish(global_msg);
+      
+      // 发布map_qr到odom的TF变换
+      Eigen::Isometry3d T_map_qr_odom = T_map_qr_base_current * T_odom_base_current.inverse();
+      
+      geometry_msgs::msg::TransformStamped tf_msg;
+      tf_msg.header.stamp = now;
+      tf_msg.header.frame_id = "map_qr";
+      tf_msg.child_frame_id = "odom";
+      tf_msg.transform.translation.x = T_map_qr_odom.translation().x();
+      tf_msg.transform.translation.y = T_map_qr_odom.translation().y();
+      tf_msg.transform.translation.z = T_map_qr_odom.translation().z();
+      
+      Eigen::Quaterniond q(T_map_qr_odom.linear());
+      tf_msg.transform.rotation.x = q.x();
+      tf_msg.transform.rotation.y = q.y();
+      tf_msg.transform.rotation.z = q.z();
+      tf_msg.transform.rotation.w = q.w();
+      
+      tf_broadcaster_->sendTransform(tf_msg);
+    } else {
+      // 没有qr输入
+      geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+        last_tracked_pose_.header.frame_id,
+        ref_odom_.header.frame_id,
+        tf2::TimePointZero);
+      
+      Eigen::Isometry3d T_map_odom = tf2::transformToEigen(transform.transform);
+      Eigen::Isometry3d T_odom_base_ref = pose_to_eigen(ref_odom_.pose.pose);
+      Eigen::Isometry3d T_odom_base_current = pose_to_eigen(last_odom_.pose.pose);
+      
+      Eigen::Isometry3d T_ref_current = T_odom_base_ref.inverse() * T_odom_base_current;
+      
+      Eigen::Isometry3d T_map_base_ref = pose_to_eigen(last_tracked_pose_.pose);
+      Eigen::Isometry3d T_map_base_current = T_map_base_ref * T_map_odom * T_ref_current * T_map_odom.inverse();
+      
+      // 创建GlobalPose消息
+      auto global_msg = amr_ros_msg::msg::GlobalPose();
+      global_msg.global_pose.header.stamp = now;
+      global_msg.global_pose.header.frame_id = last_tracked_pose_.header.frame_id;
+      global_msg.global_pose.pose = eigen_to_pose(T_map_base_current);
+      global_msg.relocate_state = current_relocate_state_;
+      
+      // Publish
+      global_pose_pub_->publish(global_msg);
+    }
     
   } catch (tf2::TransformException &ex) {
     RCLCPP_WARN(this->get_logger(), "TF exception: %s", ex.what());

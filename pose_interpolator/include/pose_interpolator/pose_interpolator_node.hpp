@@ -6,6 +6,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_ros/transform_broadcaster.h> 
 #include <mutex>
 #include <Eigen/Geometry>
 #include <rclcpp/timer.hpp>
@@ -30,10 +31,12 @@ private:
   rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr relocate_state_sub_;  // 状态订阅器
   rclcpp::Publisher<amr_ros_msg::msg::GlobalPose>::SharedPtr global_pose_pub_;  // 修改为自定义消息类型
   rclcpp::TimerBase::SharedPtr timer_;
-  
+  rclcpp::Time last_qr_pose_time_;  
+  const rclcpp::Duration qr_timeout_ = rclcpp::Duration::from_seconds(2.0);
+
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-  
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::mutex mutex_;
   geometry_msgs::msg::PoseStamped last_tracked_pose_;
   geometry_msgs::msg::PoseStamped last_qr_pose_;
