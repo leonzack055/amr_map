@@ -35,7 +35,7 @@ options = {
 }
 
 MAP_BUILDER.use_trajectory_builder_2d = true
-MAP_BUILDER.num_background_threads = 1
+MAP_BUILDER.num_background_threads = 6
 MAP_BUILDER.collate_by_trajectory = true
 
 TRAJECTORY_BUILDER.collate_landmarks = false
@@ -50,7 +50,7 @@ TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 30
 -- 节点更新
 TRAJECTORY_BUILDER_2D.motion_filter = {
-  max_time_seconds = 5.,
+  max_time_seconds = 20.,
   max_distance_meters = 0.2,
   max_angle_radians = math.rad(10.),
 }
@@ -81,7 +81,7 @@ TRAJECTORY_BUILDER_2D.ceres_scan_matcher = {
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.15
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 150
 TRAJECTORY_BUILDER_2D.min_range = 0.3
-TRAJECTORY_BUILDER_2D.max_range = 15.
+TRAJECTORY_BUILDER_2D.max_range = 25.
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 0.1
 
 -- 优化全局约束定位参数
@@ -93,7 +93,7 @@ POSE_GRAPH.constraint_builder.loop_closure_translation_weight = 2e4
 -- 全局匹配器
 POSE_GRAPH.constraint_builder.log_matches = false
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher = {
-  linear_search_window = 5.,
+  linear_search_window = 1.,
   angular_search_window = math.rad(20.),
   branch_and_bound_depth = 7,
 }
