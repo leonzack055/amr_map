@@ -190,6 +190,12 @@ Node::Node(
       [this]() {PublishLocalTrajectoryData();});
   }
 
+  // 发布Landmark Poses 以MarkerArray的格式
+  landmark_pose_list_timer_ = node_->create_wall_timer(
+    std::chrono::milliseconds(
+      int(node_options_.trajectory_publish_period_sec * 1000)),
+    [this]() {PublishLandmarkPosesList();});
+
 #if defined(__arm__) || defined(_M_ARM) || defined(__aarch64__) || defined(_M_ARM64)
   LOG(WARNING) << "架构类别: ARM 系列, 使用定位代码只进行TrackedPose定位信息发布,不创建其他发布器";
 #elif defined(__i386__) || defined(__x86_64__)
@@ -201,10 +207,6 @@ Node::Node(
     std::chrono::milliseconds(
       int(node_options_.trajectory_publish_period_sec * 1000)),
     [this]() {PublishTrajectoryNodeList();});
-  landmark_pose_list_timer_ = node_->create_wall_timer(
-    std::chrono::milliseconds(
-      int(node_options_.trajectory_publish_period_sec * 1000)),
-    [this]() {PublishLandmarkPosesList();});
   constrain_list_timer_ = node_->create_wall_timer(
     std::chrono::milliseconds(int(kConstraintPublishPeriodSec * 1000)),
     [this]() {PublishConstraintList();});
