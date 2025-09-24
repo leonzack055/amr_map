@@ -85,8 +85,8 @@ TRAJECTORY_BUILDER_2D.max_range = 25.
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 0.1
 
 -- 优化全局约束定位参数
-POSE_GRAPH.constraint_builder.max_constraint_distance = 5.
-POSE_GRAPH.constraint_builder.min_score = 0.55
+POSE_GRAPH.constraint_builder.max_constraint_distance = 9.
+POSE_GRAPH.constraint_builder.min_score = 0.58
 POSE_GRAPH.constraint_builder.global_localization_min_score = 0.6
 POSE_GRAPH.constraint_builder.loop_closure_rotation_weight = 1.5e5
 POSE_GRAPH.constraint_builder.loop_closure_translation_weight = 2e4
@@ -94,8 +94,8 @@ POSE_GRAPH.constraint_builder.loop_closure_translation_weight = 2e4
 POSE_GRAPH.constraint_builder.log_matches = false
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher = {
   linear_search_window = 1.,
-  angular_search_window = math.rad(20.),
-  branch_and_bound_depth = 7,
+  angular_search_window = math.rad(15.),
+  branch_and_bound_depth = 5,
 }
 POSE_GRAPH.constraint_builder.ceres_scan_matcher = {
   occupied_space_weight = 20.,
