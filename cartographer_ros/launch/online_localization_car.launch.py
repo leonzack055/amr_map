@@ -87,6 +87,13 @@ def generate_launch_description():
         parameters=[{
             'output_frequency': 50.0,
             'max_interpolation_time': 0.5,
+            'receive_qr_time': 2.0,
+            'odom_stop_time': 2.0,
+            'limit_range_between_qr_cart': 0.07,
+            'relocate_freeze_time' : 20.0,
+            'speed_threshold': 0.01,
+            'qr_timeout_sec': 2.0,
+            'publish_map_qr_tf': False,
             # 'use_sim_time': True
         }],
         remappings=[
@@ -109,6 +116,6 @@ def generate_launch_description():
             ),
         pose_interpolator_node,   
         # 主节点立即启动
-        cartographer_occupancy_grid_node
+        #cartographer_occupancy_grid_node
         
     ])

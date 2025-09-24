@@ -19,7 +19,20 @@ PoseInterpolator::PoseInterpolator()
   // Parameters
   this->declare_parameter("output_frequency", 50.0);
   double frequency = this->get_parameter("output_frequency").as_double();
-  
+  this->declare_parameter("receive_qr_time", 2.0);      // 默认稳定2
+  this->declare_parameter("odom_stop_time", 2.0);        // 
+  this->declare_parameter("relocate_freeze_time", 20.0);      // 默认暂停20秒
+  this->declare_parameter("limit_range_between_qr_cart", 0.1);
+  this->declare_parameter("speed_threshold", 0.01); // 默认车速阈值0.01m/s
+  this->declare_parameter("publish_map_qr_tf", false);  // 默认不发布TF变换
+  this->declare_parameter("qr_timeout_sec", 2.0);  // 默认发布TF变换
+  receive_qr_time_ = this->get_parameter("receive_qr_time").as_double();
+  odom_stop_time_ = this->get_parameter("odom_stop_time").as_double();
+  relocate_freeze_time_ = this->get_parameter("relocate_freeze_time").as_double();
+  limit_range_between_qr_cart_ = this->get_parameter("limit_range_between_qr_cart").as_double();
+  speed_threshold_ = this->get_parameter("speed_threshold").as_double();
+  publish_map_qr_tf_ = this->get_parameter("publish_map_qr_tf").as_bool();
+  qr_timeout_ = this->get_parameter("qr_timeout_sec").as_double();  // 用参数初始化超时时间
   // Initialize TF
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -46,11 +59,13 @@ PoseInterpolator::PoseInterpolator()
   // Publisher - changed to GlobalPose type
   global_pose_pub_ = this->create_publisher<amr_ros_msg::msg::GlobalPose>(
     "/global_pose", 10);
-
+  initial_pose_pub_ = this->create_publisher<amr_ros_msg::msg::PoseWithTypeStamped>(
+    "/initial_pose", 10);
   // Timer for interpolation
   timer_ = this->create_wall_timer(
     std::chrono::duration<double>(1.0 / frequency),
     std::bind(&PoseInterpolator::timer_callback, this));
+
   RCLCPP_INFO(this->get_logger(), "Pose interpolator node initialized");
 }
 
@@ -80,13 +95,31 @@ void PoseInterpolator::tracked_pose_callback(
 
 void PoseInterpolator::qr_pose_callback(
   const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-  if (qr_pose_active_ && (this->now() - last_qr_pose_time_ > qr_timeout_)) {
-    qr_pose_active_ = false;
-    RCLCPP_WARN(this->get_logger(), "QR pose timed out, deactivating");
+  // if (qr_pose_active_ && (this->now() - last_qr_pose_time_ > qr_timeout_)) {
+  //   qr_pose_active_ = false;
+  //   RCLCPP_WARN(this->get_logger(), "QR pose timed out, deactivating");
+  // }
+
+  // RCLCPP_INFO(this->get_logger(), "i receive a qr pose");
+
+  if (qr_pose_active_ == false)
+  {
+      // RCLCPP_INFO(this->get_logger(), "qr_pose_active_ is false");
+
+    start_receive_qr_time_ = this->now();
+    last_start_relocation_time_ = this->now();
   }
+  
   qr_pose_active_ = true;
   last_qr_pose_ = *msg;
   last_qr_pose_time_ = this->now();  // 更新时间戳
+  if (qr_pose_active_ && (this->now() - start_receive_qr_time_).seconds() >= receive_qr_time_)
+  {
+    // RCLCPP_INFO(this->get_logger(), "receive 2 second and start reloc");
+    start_relocation_process();
+    RCLCPP_INFO(this->get_logger(), "QR pose active and stable for %.1f seconds", receive_qr_time_);
+  }
+  
 }
 
 void PoseInterpolator::odom_callback(
@@ -94,32 +127,86 @@ void PoseInterpolator::odom_callback(
   // if (qr_pose_active_) {
   //   return;
   // }
-  
+  // RCLCPP_INFO(this->get_logger(), "input   last_odom_.header.stamp.sec %d", msg->header.stamp.sec);
   last_odom_ = *msg;
 }
 
-void PoseInterpolator::timer_callback() {  
 
-  if (qr_pose_active_ && (this->now() - last_qr_pose_time_ > qr_timeout_)) {
-    qr_pose_active_ = false;
+
+void PoseInterpolator::start_relocation_process() {
+// RCLCPP_INFO(this->get_logger(), "im in relocation_process");
+  double dist = std::sqrt(
+            abs(last_tracked_pose_.pose.position.x - last_qr_pose_.pose.position.x) * abs(last_tracked_pose_.pose.position.x - last_qr_pose_.pose.position.x)+ 
+            abs(last_tracked_pose_.pose.position.y - last_qr_pose_.pose.position.y) * abs(last_tracked_pose_.pose.position.y - last_qr_pose_.pose.position.y)
+          );
+  
+  // RCLCPP_INFO(this->get_logger(), "last_tracked_pose_pose.position.x: %f", last_tracked_pose_.pose.position.x);
+  // RCLCPP_INFO(this->get_logger(), "last_tracked_pose_.pose.position.y: %f", last_tracked_pose_.pose.position.y);
+  // RCLCPP_INFO(this->get_logger(), "last_qr_pose_.pose.position.x: %f", last_qr_pose_.pose.position.x);
+  // RCLCPP_INFO(this->get_logger(), "last_qr_pose_.pose.position.y: %f", last_qr_pose_.pose.position.y);
+  if (this->now() - last_start_relocation_time_ > rclcpp::Duration::from_seconds(relocate_freeze_time_) && dist > limit_range_between_qr_cart_)
+    {        
+      pub_relocate_state_ = true;
+    }
+  // relocation_state_ = uint8(2);
+  double speed = std::sqrt(last_odom_.twist.twist.linear.x * last_odom_.twist.twist.linear.x + last_odom_.twist.twist.linear.y * last_odom_.twist.twist.linear.y);
+  RCLCPP_INFO(this->get_logger(), "speed %f ",speed);
+  if (speed < speed_threshold_)
+  {
+    RCLCPP_INFO(this->get_logger(), "speed is zero ");
+
+
+    double timedist = (this->now() - last_start_relocation_time_).seconds();
+    RCLCPP_INFO(this->get_logger(), "dist_time: %f", timedist);
+    RCLCPP_INFO(this->get_logger(), "relocate_freeze_time_: %f", relocate_freeze_time_);
+    RCLCPP_INFO(this->get_logger(), "dist: %f", dist);
+    RCLCPP_INFO(this->get_logger(), "limit_range_between_qr_cart_: %f", limit_range_between_qr_cart_);
+    if (((this->now() - last_start_relocation_time_).seconds() > relocate_freeze_time_) && (dist > limit_range_between_qr_cart_))
+    {
+      RCLCPP_INFO(this->get_logger(), "pub reloc mseeage ");
+      publish_auto_relocation();
+      last_start_relocation_time_ = this->now();
+    }
   }
 
-  if (qr_pose_active_) {
-    last_tracked_pose_= last_qr_pose_;
-    last_tracked_pose_time_ = last_qr_pose_.header.stamp;
-    if (last_odom_.header.stamp.sec != 0) {
+}
+
+
+
+void PoseInterpolator::publish_auto_relocation() {
+  // 发布自动重定位消息
+  auto initial_pose_msg = amr_ros_msg::msg::PoseWithTypeStamped();
+  initial_pose_msg.type = "M";
+  initial_pose_msg.inital_pose.header.stamp = this->now();
+  initial_pose_msg.inital_pose.header.frame_id = "map";
+  initial_pose_msg.inital_pose.pose = last_qr_pose_.pose;  // 使用global_pose_qr的位姿
+  
+  initial_pose_pub_->publish(initial_pose_msg);
+  pub_relocate_state_ = false;
+  RCLCPP_INFO(this->get_logger(), "发布自动重定位消息,并停止重定位为2的发送");
+  RCLCPP_INFO(this->get_logger(), "pub finish ");
+
+}
+
+
+void PoseInterpolator::timer_callback() {  
+
+  if (qr_pose_active_ && ((this->now() - last_qr_pose_time_).seconds() > qr_timeout_)) {
+    qr_pose_active_ = false;
+  }
+  // RCLCPP_INFO(this->get_logger(), "1 ");
+  // RCLCPP_INFO(this->get_logger(), "last_odom_.header.stamp.sec %d", last_odom_.header.stamp.sec);
+  if (last_odom_.header.stamp.sec != 0) {
       ref_odom_ = last_odom_;
       ref_odom_initialized_ = true;
       data_valid_ = true;
     }
-  }
-  
   if (!data_valid_ || !ref_odom_initialized_) {
     return;
   }
-  
+  // RCLCPP_INFO(this->get_logger(), "2 ");
   auto now = this->get_clock()->now();
-  double dt = (now - last_tracked_pose_time_).seconds();
+  double dt = (now - last_qr_pose_.header.stamp).seconds();
   
   if (dt < 0.02) {
     return;
@@ -128,6 +215,7 @@ void PoseInterpolator::timer_callback() {
   try {
     if (qr_pose_active_) {
       // 直接使用QR位姿和里程计数据计算变换
+      // RCLCPP_INFO(this->get_logger(), "3 ");
       Eigen::Isometry3d T_map_qr_base_ref = pose_to_eigen(last_qr_pose_.pose);
       Eigen::Isometry3d T_odom_base_ref = pose_to_eigen(ref_odom_.pose.pose);
       Eigen::Isometry3d T_odom_base_current = pose_to_eigen(last_odom_.pose.pose);
@@ -141,12 +229,23 @@ void PoseInterpolator::timer_callback() {
       global_msg.global_pose.header.stamp = now;
       global_msg.global_pose.header.frame_id = "map_qr";
       global_msg.global_pose.pose = eigen_to_pose(T_map_qr_base_current);
-      global_msg.relocate_state = current_relocate_state_;
+      if(pub_relocate_state_ == true)
+      {
+        global_msg.relocate_state = uint(2);
+      }
+      else
+      {
+        global_msg.relocate_state = current_relocate_state_;
+      }
+      
       
       // Publish
       global_pose_pub_->publish(global_msg);
       
       // 发布map_qr到odom的TF变换
+      if(publish_map_qr_tf_)
+      {
+        // RCLCPP_INFO(this->get_logger(), "4 ");
       Eigen::Isometry3d T_map_qr_odom = T_map_qr_base_current * T_odom_base_current.inverse();
       
       geometry_msgs::msg::TransformStamped tf_msg;
@@ -164,7 +263,9 @@ void PoseInterpolator::timer_callback() {
       tf_msg.transform.rotation.w = q.w();
       
       tf_broadcaster_->sendTransform(tf_msg);
+      }
     } else {
+      // RCLCPP_INFO(this->get_logger(), "5 ");
       // 没有qr输入
       geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
         last_tracked_pose_.header.frame_id,

@@ -204,7 +204,22 @@ class CartographerInitializer(Node):
         if not self.finish_current_trajectory():
             self.get_logger().error("无法停止当前轨迹，初始化失败")
             return False
-        
+         # 新增：循环检测是否还有活跃轨迹，直到没有轨迹再继续
+        self.get_logger().info("开始检测是否存在活跃轨迹...")
+        timeout = 20.0  
+        check_interval = 0.1  # 检测间隔0.5秒
+        start_check_time = time.time()
+        while time.time() - start_check_time < timeout:
+            current_traj_id = self.get_current_trajectory_id()
+            if current_traj_id is None:
+                self.get_logger().info("确认当前无活跃轨迹，准备启动新轨迹")
+                break
+            self.get_logger().info(f"仍存在活跃轨迹ID: {current_traj_id}，等待...")
+            time.sleep(check_interval)
+        else:
+            # 超时仍有活跃轨迹
+            self.get_logger().error(f"等待{timeout}秒后仍存在活跃轨迹，无法启动新轨迹")
+            return False
         # 步骤3: 启动新轨迹
         self.get_logger().info("正在启动新轨迹...")
         return self.start_new_trajectory(self.initial_pose)
