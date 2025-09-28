@@ -96,6 +96,7 @@ find_package(tf2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(urdf REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(landmark_localization REQUIRED)
 find_package(Protobuf REQUIRED)
 # 新增
 find_package(rclcpp_lifecycle REQUIRED)
@@ -247,6 +248,8 @@ target_link_libraries(cartographer_lifecycle_offline_node PRIVATE
   rclcpp::rclcpp
   urdf::urdf
   rclcpp_lifecycle::rclcpp_lifecycle
+  landmark_localization::reflective_post_detector
+  landmark_localization::landmark_assigner
   ${Boost_LIBRARIES}
 )
 
@@ -371,6 +374,7 @@ ament_export_dependencies(
   visualization_msgs
   rclcpp_lifecycle
   lifecycle_msgs
+  landmark_localization
 )
 ament_package()
 

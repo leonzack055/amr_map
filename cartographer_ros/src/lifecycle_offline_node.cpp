@@ -46,9 +46,13 @@
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer_ros/ros_map.h"
+#include "cartographer_ros/msg_conversion.h"
 #include "gflags/gflags.h"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
+#include "landmark_localization/common/msg_conversion.hpp"
+#include "landmark_localization/reflective_post_detector.hpp"
+#include "landmark_localization/landmark_assigner.hpp"
 #ifdef USE_URDF_H_FILES
 #include "urdf/model.h"
 #else
@@ -122,6 +126,9 @@ LifecycleOfflineCartoNode::LifecycleOfflineCartoNode(
   RCLCPP_INFO(
     this->get_logger(), "%s 包的安装路径: %s share路径； %s", package_name.c_str(), package_prefix.c_str(),
     package_shared.c_str());
+  // 指定默认权重
+  landmark_translation_weight_ = 1e5;
+  landmark_rotation_weight_ = 1e1;
 }
 
 void LifecycleOfflineCartoNode::bagProcessDataCallback(
@@ -555,6 +562,12 @@ LifecycleOfflineCartoNode::on_activate(const rclcpp_lifecycle::State & state)
       auto odom_serializer = rclcpp::Serialization<nav_msgs::msg::Odometry>();
       auto nav_sat_fix_serializer = rclcpp::Serialization<sensor_msgs::msg::NavSatFix>();
       auto landmark_list_serializer = rclcpp::Serialization<cartographer_ros_msgs::msg::LandmarkList>();
+      // 反光柱Laserscan处理方法，当前只支持单个传感器的Laserscan
+      // 1. 生成反光柱检测器，使用实车场景中的默认参数; intesity=1600
+      auto landmarks_detector = std::make_shared<landmark_localization::ReflectivePostDetector>();
+      // 2. 创建反光柱id分配器；
+      auto landmarks_assigner = std::make_shared<landmark_localization::LandmarkAssigner>();
+      landmarks_assigner->search_range(10.0).match_threshold(0.2);
       // TODO：加入判断进行建图取消响应操作 配置 STATUS_CANCEL
       while (playable_bag_multiplexer.IsMessageAvailable() && enable_mapping_) {
         if (!::rclcpp::ok()) {
@@ -612,15 +625,111 @@ LifecycleOfflineCartoNode::on_activate(const rclcpp_lifecycle::State & state)
         // 找到对应传感器类型进行处理建图
         if (it != bag_topic_to_sensor_id.end()) {
           const std::string & sensor_id = it->second.id;
-
           if (topic_type == "sensor_msgs/msg/LaserScan") {
             rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
             sensor_msgs::msg::LaserScan::SharedPtr laser_scan_msg =
             std::make_shared<sensor_msgs::msg::LaserScan>();
             laser_scan_serializer.deserialize_message(&serialized_msg, laser_scan_msg.get());
-            node.HandleLaserScanMessage(
-              trajectory_id, sensor_id,
-              laser_scan_msg);
+            // TODO: 进行landmarkers的反光柱消息提取，进行处理，分配到landmark处理过程中。
+            // 分配器还没有多Laser映射机制，目前只能拿单雷达进ID维护
+            if (bag_trajectory_options.at(bag_index).use_landmarks &&
+            sensor_id == "scan" && !landmarks_assigner->isBase2LaserTransOK())
+            {
+              geometry_msgs::msg::TransformStamped transform;
+              try {
+                tf_buffer->canTransform(
+                  "base_link", laser_scan_msg->header.frame_id,
+                  tf2::TimePointZero);
+                transform = tf_buffer->lookupTransform(
+                  "base_link",
+                  laser_scan_msg->header.frame_id,
+                  tf2::TimePointZero);
+              } catch (const tf2::TransformException & ex) {
+                LOG(FATAL) << "TF2 查找 base_link 2 " << laser_scan_msg->header.frame_id
+                           << "error: " << ex.what();
+              }
+              landmarks_assigner->setBase2LaserTrans(transforms::ToRigid3d(transform));
+              LOG(
+                WARNING) << "反光柱检测器分配器设置base_link To " << laser_scan_msg->header.frame_id << " 变换";
+            }
+            // 2. 激光雷达扫描处理
+            node.HandleLaserScanMessage(trajectory_id, sensor_id, laser_scan_msg);
+            // 1. NOTICE: 获取当前laserscan后，匹配的tracked_pose；可能有多个包，但仍然是单车单雷达可通过获取当前对应
+            // 轨迹的全局tracked_pose，来更新assigner中的位姿，维持数据，要确保assigner中的位姿是最新的，
+            // 也就是说多个包的情况也是按时间顺序发布的。
+            if(!bag_trajectory_options.at(bag_index).use_landmarks || sensor_id != "scan") {
+              continue;
+            }
+            for (const auto & entry : node.map_builder_bridge_->GetLocalTrajectoryData()) {
+              const auto & trajectory_data = entry.second;
+              const cartographer::transform::Rigid3d tracking_to_local_3d = trajectory_data.local_slam_data->local_pose;
+              ::geometry_msgs::msg::PoseStamped pose_msg;
+              pose_msg.header.stamp = ToRos(
+                trajectory_data.local_slam_data->time);
+              pose_msg.header.frame_id = "map";
+              const cartographer::transform::Rigid3d tracking_to_map = trajectory_data.local_to_map * tracking_to_local_3d;
+              pose_msg.pose = cartographer_ros::ToGeometryMsgPose(tracking_to_map);
+              landmarks_assigner->update_tracked_pose(
+                transforms::ToRigid3d(pose_msg.pose),
+                pose_msg.header.stamp.nanosec);
+            }
+            // 2. 对当前scan中的landmarkers进行匹配，更新tracked_pose的landmarkers；
+            landmark_localization::LaserScan scan;
+            scan.header = laser_scan_msg->header.frame_id;
+            scan.ranges = laser_scan_msg->ranges;
+            scan.intensities = laser_scan_msg->intensities;
+            scan.angle_min = laser_scan_msg->angle_min;
+            scan.angle_max = laser_scan_msg->angle_max;
+            scan.angle_increment = laser_scan_msg->angle_increment;
+            scan.scan_time = laser_scan_msg->scan_time;
+            scan.range_min = laser_scan_msg->range_min;
+            scan.range_max = laser_scan_msg->range_max;
+            auto detected_posts = landmarks_detector->detect_circles(scan);
+            if (!landmarks_assigner->isLandmarkDetectorOK(laser_scan_msg->header.stamp.nanosec)) {
+              LOG(WARNING) << "反光柱分配器未初始化完成!! 请检查TF和tracked_pose!";
+              continue;
+            }
+            if (detected_posts.empty()) {
+              LOG(INFO) << "未检测到有效反光柱";
+              continue;
+            }
+            auto reflector_posts = landmarks_assigner->assignLandmarkToReflectorBar(detected_posts);
+            cartographer_ros_msgs::msg::LandmarkList::SharedPtr landmark_list_msg =
+            std::make_shared<cartographer_ros_msgs::msg::LandmarkList>();
+            landmark_list_msg->header = laser_scan_msg->header;
+            std::vector<cartographer_ros_msgs::msg::LandmarkEntry> poses_array;
+            cartographer_ros_msgs::msg::LandmarkEntry poseSimple;
+            for (auto & landmark : reflector_posts) {
+              poseSimple.tracking_from_landmark_transform = transforms::ToGeometryMsgPose(
+                landmark.g_detection_.pose.pose);
+              poseSimple.translation_weight = landmark.g_detection_.translationW *
+              landmark_translation_weight_;
+              poseSimple.rotation_weight = landmark_rotation_weight_;
+              poseSimple.id = landmark.id_str_;
+              poses_array.push_back(poseSimple);
+            }
+            landmark_list_msg->landmarks = poses_array;
+            node.HandleLandmarkMessage(
+              trajectory_id, cartographer_ros::kLandmarkTopic,
+              landmark_list_msg);
+
+            // 3. 更新tracked_pose的landmarkers；这里以now()使用仿真时间来驱别于laser_scan的时间戳
+            rclcpp::Time landmarks_ros_timestamp = ros_node_->now();
+            auto landmark_makers_msg = node.map_builder_bridge_->GetLandmarkPosesList(ros_node_->now());
+            std::map<int, transforms::Rigid3d> optimized_landmarks;
+            int64_t optimized_timestamp;
+            for (const auto & marker_msg : landmark_makers_msg.markers) {
+              // 处理反光柱位姿
+              if (marker_msg.ns == "Landmarks" && marker_msg.header.frame_id == "map") {
+                int id = marker_msg.id;
+                optimized_landmarks[id] = transforms::ToRigid3d(marker_msg.pose);
+              }
+            }
+            optimized_timestamp = landmarks_ros_timestamp.nanoseconds();
+            if (!optimized_landmarks.empty()) {
+              LOG(INFO) << "反光柱分配器更新优化后的反光柱位姿: 更新" << optimized_landmarks.size() << "个反光柱位姿";
+            }
+            landmarks_assigner->update_landmarks(optimized_landmarks, optimized_timestamp);
           } else if (topic_type == "sensor_msgs/msg/MultiEchoLaserScan") {
             rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
             sensor_msgs::msg::MultiEchoLaserScan::SharedPtr multi_echo_laser_scan_msg =
@@ -775,6 +884,8 @@ LifecycleOfflineCartoNode::on_activate(const rclcpp_lifecycle::State & state)
       node.constrain_list_timer_.reset();
       node.maybe_warn_about_topic_mismatch_timer_.reset();
       clock_republish_timer.reset();
+      landmarks_assigner.reset();
+      landmarks_detector.reset();
       LOG(INFO) << "完成节点资源清理建图流程!!.";
       // 配置STAUS_COMPLETE 完成建图
       if (!enable_mapping_) {

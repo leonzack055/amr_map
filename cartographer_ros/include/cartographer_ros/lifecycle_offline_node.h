@@ -139,6 +139,8 @@ private:
   std::string cartographer_shared_dir_;
   std::string default_configuration_basename_;
   MapBuilderFactory map_builder_factory_;
+  double landmark_translation_weight_;
+  double landmark_rotation_weight_;
   // 建图逻辑线程
   std::unique_ptr<std::thread> thread_;
   rclcpp::Executor::SharedPtr carto_executor_;

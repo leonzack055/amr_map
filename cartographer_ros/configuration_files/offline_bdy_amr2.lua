@@ -27,7 +27,7 @@ options = {
   use_odometry = false,
   use_pose_extrapolator = true,
   use_nav_sat = false,
-  use_landmarks = false,
+  use_landmarks = true,
   num_laser_scans = 1,
   num_multi_echo_laser_scans = 0,
   num_subdivisions_per_laser_scan = 1,
@@ -75,7 +75,7 @@ POSE_GRAPH.optimization_problem.acceleration_weight = 0.1 * 1e3
 POSE_GRAPH.optimization_problem.rotation_weight = 0.1 * 3e5
 -- ignore wheels in optimization
 POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e5
-POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e5
+POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e4
 -- optimization problem setting
 POSE_GRAPH.optimization_problem.log_solver_summary = true
 POSE_GRAPH.optimization_problem.huber_scale = 1e2
