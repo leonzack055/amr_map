@@ -68,7 +68,7 @@ DEFINE_bool(
   "Activates the collection of runtime metrics. If activated, the "
   "metrics can be accessed via a ROS service.");
 DEFINE_bool(
-  use_bag_transforms, false,
+  use_bag_transforms, true,
   "Whether to read, use and republish transforms from bags.");
 DEFINE_bool(
   keep_running, true,
@@ -385,14 +385,14 @@ LifecycleOfflineCartoNode::on_activate(const rclcpp_lifecycle::State & state)
         ros_node_->get_clock(),
         tf2::durationFromSec(10),
         ros_node_);
-
       // 从urdf文件中读取 对应的static_transforms变化
       std::regex regex(",");
       std::vector<geometry_msgs::msg::TransformStamped> urdf_transforms;
-      if (!urdf_path_.empty()) {
+      if (!FLAGS_use_bag_transforms && !urdf_path_.empty()) {
         std::vector<std::string> urdf_filenames;
         urdf_filenames.push_back(urdf_path_);
         for (const auto & urdf_filename : urdf_filenames) {
+          LOG(INFO) << "加载URDF文件: " << urdf_filename;
           const auto current_urdf_transforms =
           ReadStaticTransformsFromUrdf(urdf_filename, tf_buffer);
           urdf_transforms.insert(
@@ -400,7 +400,7 @@ LifecycleOfflineCartoNode::on_activate(const rclcpp_lifecycle::State & state)
             current_urdf_transforms.begin(),
             current_urdf_transforms.end());
         }
-      } else {
+      } else if(!FLAGS_use_bag_transforms){
         map_build_status_ = MapBuildStatus::STATUS_ERROR;
         LOG(WARNING) << "没有指定urdf文件，无法发布静态tf消息";
         return;
