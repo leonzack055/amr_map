@@ -136,6 +136,7 @@ private:
   std::string output_pbstream_path_;
   std::string urdf_path_;
   std::string cartographer_install_dir_;
+  std::string rosbag_dir_;
   std::string cartographer_shared_dir_;
   std::string default_configuration_basename_;
   MapBuilderFactory map_builder_factory_;

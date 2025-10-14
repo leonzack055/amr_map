@@ -79,6 +79,11 @@ DEFINE_double(
   "Optional amount of seconds to skip from the beginning "
   "(i.e. when the earliest bag starts.). ");
 
+DEFINE_bool(
+  use_default_bagDir, true,
+  "Optional where the ros bags for offline mapping is installed "
+  "(abs_DIR: /home/root/amr_ws/rosbag_dir .). ");
+
 namespace cartographer_ros
 {
 
@@ -114,6 +119,10 @@ LifecycleOfflineCartoNode::LifecycleOfflineCartoNode(
     "/bagfile_progress", 10,
     std::bind(&LifecycleOfflineCartoNode::bagProcessDataCallback, this, std::placeholders::_1));
 
+  rosbag_dir_ = "";
+  this->declare_parameter("rosbag_dir", "/home/root/amr_ws/rosbag_dir");
+  this->get_parameter<std::string>("rosbag_dir", this->rosbag_dir_);
+
   // 扩展：获取包的共享资源路径（如share目录）
   std::string package_name = "cartographer_ros";
   std::string use_urdf_file = "/urdf/byd_amr.urdf";
@@ -121,6 +130,9 @@ LifecycleOfflineCartoNode::LifecycleOfflineCartoNode(
   std::string package_shared = ament_index_cpp::get_package_share_directory(package_name);
   cartographer_shared_dir_ = package_shared;
   cartographer_install_dir_ = package_prefix;
+  if(FLAGS_use_default_bagDir) {
+    cartographer_install_dir_ = rosbag_dir_;
+  }
   urdf_path_ = cartographer_shared_dir_ + use_urdf_file;
   default_configuration_basename_ = "offline_bdy_amr2.lua";
   RCLCPP_INFO(
