@@ -1,0 +1,191 @@
+# CMakeLists.txt for Cartographer Line Feature Extraction
+# 直线特征提取系统的构建配置
+
+cmake_minimum_required(VERSION 3.10)
+project(cartographer_ros_line_extraction)
+
+# 设置C++标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 编译选项
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
+
+# 查找依赖包
+find_package(protobuf REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(cairo REQUIRED)
+find_package(PkgConfig REQUIRED)
+
+# 包含目录
+include_directories(
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../cartographer
+  ${EIGEN3_INCLUDE_DIR}
+  ${PROTOBUF_INCLUDE_DIRS}
+  ${CAIRO_INCLUDE_DIRS}
+)
+
+# 源文件
+set(LINE_FEATURE_SOURCES
+  src/line_feature.cpp
+  src/line_feature_utils.cpp
+  src/image_preprocessor.cpp
+  src/hough_transform.cpp
+  src/lsd_detector.cpp
+  src/line_feature_extractor.cpp
+  src/line_feature_test.cpp
+)
+
+# 头文件
+set(LINE_FEATURE_HEADERS
+  include/cartographer_ros/line_feature.h
+  include/cartographer_ros/image_preprocessor.h
+  include/cartographer_ros/hough_transform.h
+  include/cartographer_ros/lsd_detector.h
+  include/cartographer_ros/line_feature_extractor.h
+)
+
+# 创建静态库
+add_library(cartographer_ros_line_extraction STATIC
+  ${LINE_FEATURE_SOURCES}
+  ${LINE_FEATURE_HEADERS}
+)
+
+# 设置库的包含目录
+target_include_directories(cartographer_ros_line_extraction
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
+# 链接库
+target_link_libraries(cartographer_ros_line_extraction
+  PUBLIC
+    ${PROTOBUF_LIBRARIES}
+    ${CAIRO_LIBRARIES}
+    Eigen3::Eigen
+)
+
+# 创建测试可执行文件
+add_executable(line_feature_test
+  src/line_feature_test.cpp
+)
+
+target_link_libraries(line_feature_test
+  cartographer_ros_line_extraction
+  ${PROTOBUF_LIBRARIES}
+  ${CAIRO_LIBRARIES}
+  Eigen3::Eigen
+)
+
+# 安装规则
+install(TARGETS cartographer_ros_line_extraction
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(FILES ${LINE_FEATURE_HEADERS}
+  DESTINATION include/cartographer_ros
+)
+
+install(TARGETS line_feature_test
+  RUNTIME DESTINATION bin
+)
+
+# 可选：集成到现有Cartographer构建
+option(BUILD_LINE_FEATURE_EXTRACTION "Build line feature extraction module" ON)
+
+if(BUILD_LINE_FEATURE_EXTRACTION)
+  # 添加到主Cartographer构建
+  set(CARTOGRAPHER_ROS_SOURCES ${CARTOGRAPHER_ROS_SOURCES} ${LINE_FEATURE_SOURCES} PARENT_SCOPE)
+  set(CARTOGRAPHER_ROS_HEADERS ${CARTOGRAPHER_ROS_HEADERS} ${LINE_FEATURE_HEADERS} PARENT_SCOPE)
+  
+  # 添加链接库
+  set(CARTOGRAPHER_ROS_LIBS ${CARTOGRAPHER_ROS_LIBS} cartographer_ros_line_extraction PARENT_SCOPE)
+endif()
+
+# 测试配置
+enable_testing()
+
+# 单元测试
+add_executable(line_feature_unit_tests
+  test/test_line_feature.cpp
+  test/test_image_preprocessor.cpp
+  test/test_hough_transform.cpp
+  test/test_lsd_detector.cpp
+)
+
+target_link_libraries(line_feature_unit_tests
+  cartographer_ros_line_extraction
+  ${GTEST_LIBRARIES}
+  pthread
+)
+
+add_test(NAME LineFeatureUnitTests COMMAND line_feature_unit_tests)
+
+# 性能测试
+add_executable(line_feature_benchmarks
+  benchmark/benchmark_line_extraction.cpp
+)
+
+target_link_libraries(line_feature_benchmarks
+  cartographer_ros_line_extraction
+  ${BENCHMARK_LIBRARIES}
+)
+
+# 代码覆盖率
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND BUILD_TESTING)
+  find_package(Gcov REQUIRED)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+  target_link_libraries(cartographer_ros_line_extraction gcov)
+endif()
+
+# 文档生成
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+  set(DOXYGEN_INPUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  set(DOXYGEN_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/docs)
+  
+  add_custom_target(docs
+    COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating API documentation with Doxygen"
+    VERBATIM
+  )
+endif()
+
+# 打包配置
+set(CPACK_PACKAGE_NAME "CartographerROSLineExtraction")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_PACKAGE_DESCRIPTION "Line feature extraction for Cartographer ROS")
+set(CPACK_PACKAGE_VENDOR "Cartographer Team")
+
+include(CPack)
+
+# 编译器特定设置
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter")
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter")
+endif()
+
+# 警告配置
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
+  message(STATUS "Debug build: Debug symbols enabled, optimization disabled")
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+  message(STATUS "Release build: Optimization enabled")
+endif()
+
+# 输出构建信息
+message(STATUS "Building Cartographer Line Feature Extraction")
+message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "Install Prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "Eigen3 Include: ${EIGEN3_INCLUDE_DIR}")
+message(STATUS "Protobuf Libraries: ${PROTOBUF_LIBRARIES}")
+message(STATUS "Cairo Libraries: ${CAIRO_LIBRARIES}")

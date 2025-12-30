@@ -100,6 +100,7 @@ find_package(landmark_localization REQUIRED)
 find_package(Protobuf REQUIRED)
 # 新增
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 set(BOOST_COMPONENTS iostreams filesystem)
 find_package(Boost REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 
@@ -137,6 +138,14 @@ add_library(${PROJECT_NAME} SHARED
   src/metrics/internal/family.cpp
   src/metrics/internal/histogram.cpp
   src/message_map.pb.cc
+  
+  # 新增：直线特征提取源文件
+  src/image_preprocessor.cpp
+  src/hough_transform.cpp
+  src/lsd_detector.cpp
+  src/line_feature_utils.cpp
+  src/line_feature_extractor.cpp
+  src/cv_lsd_detector.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -179,6 +188,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   tf2_eigen::tf2_eigen
   ${tf2_msgs_TARGETS}
   urdf::urdf
+  ${OpenCV_LIBS}
 )
 
 # Executables
@@ -295,6 +305,23 @@ target_link_libraries(cartographer_pbstream_to_ros_map PRIVATE
   rclcpp::rclcpp
 )
 
+add_executable(cartographer_line_feature_extractor src/line_feature_extractor_simple.cpp)
+target_include_directories(cartographer_line_feature_extractor PRIVATE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
+)
+target_link_libraries(cartographer_line_feature_extractor PRIVATE
+  ${PROJECT_NAME}
+  gflags
+  rclcpp::rclcpp
+  ${OpenCV_LIBS}
+)
+
+# 添加最小化测试程序
+add_executable(cartographer_minimal_test src/minimal_test.cpp)
+target_link_libraries(cartographer_minimal_test PRIVATE)
+
 add_executable(cartographer_rosbag_validate src/rosbag_validate_main.cpp)
 target_include_directories(cartographer_rosbag_validate PRIVATE
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -343,6 +370,7 @@ install(TARGETS
   cartographer_assets_writer
   cartographer_pbstream_map_publisher
   cartographer_pbstream_to_ros_map
+  cartographer_line_feature_extractor
   cartographer_rosbag_validate
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
@@ -375,6 +403,7 @@ ament_export_dependencies(
   rclcpp_lifecycle
   lifecycle_msgs
   landmark_localization
+  OpenCV
 )
 ament_package()
 

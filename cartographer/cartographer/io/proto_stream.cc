@@ -86,6 +86,15 @@ bool ProtoStreamReader::Read(std::string* decompressed_data) {
     return false;
   }
   common::FastGunzipString(compressed_data, decompressed_data);
+  // LOG(INFO) << "解压前数据为: " << compressed_data.size() << " 个字节";
+  // LOG(INFO) << "解压后数据为: " << decompressed_data->size()  << " 个字节";
+  // for (int i = 0; i < 10; ++i) {
+  //   printf("%4d | %8u | 0x%02X\n", 
+  //              i, 
+  //              (unsigned char)(*decompressed_data)[i],       // 十进制
+  //              (unsigned char)(*decompressed_data)[i] // 十六进制（unsigned 避免符号问题）
+  //             );
+  // }
   return true;
 }
 

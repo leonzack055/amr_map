@@ -48,7 +48,7 @@ def generate_launch_description():
             '-configuration_directory', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
             '-configuration_basename', 'visualize_pbstream.lua',
             '-load_state_filename', LaunchConfiguration('pbstream_filename'),
-            '-load_frozen_state=false',
+            '-load_frozen_state=true',
             '-start_trajectory_with_default_topics=false'],
         output = 'screen'
         )

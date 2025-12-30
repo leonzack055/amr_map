@@ -32,6 +32,11 @@ def generate_launch_description():
 
     urdf_dir = os.path.join(pkg_share, 'urdf')
     urdf_file = os.path.join(urdf_dir, 'byd_amr.urdf')
+    
+    declare_load_state = DeclareLaunchArgument('load_state_filename', default_value='', description='Filename of the state file to load.')
+    declare_load_fronze = DeclareLaunchArgument('load_frozen_state', default_value='false', description='Whether to load the state as frozen.')
+    load_state_filename = LaunchConfiguration('load_state_filename')
+    load_frozen_state = LaunchConfiguration('load_frozen_state')
     with open(urdf_file, 'r') as infp:
         robot_desc = infp.read()
     # 是否使用 robot_state_publisher 节点
@@ -59,6 +64,8 @@ def generate_launch_description():
             '-configuration_directory', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
             '-configuration_basename', 'online_byd_landmark.lua',
             '-save_state_filename', pkg_prefix+'/map.pbstream',
+            '-load_state_filename', load_state_filename,
+            '-load_frozen_state', load_frozen_state,
             '--ros-args', '--log-level', 'info'],
         remappings = [
             ('odom', '/odom_combined'),],
@@ -82,6 +89,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_load_state,
+        declare_load_fronze,
         # Launch arguments
         declear_use_urdf,
         LogInfo(msg=[LaunchConfiguration('use_urdf')]),

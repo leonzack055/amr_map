@@ -27,6 +27,7 @@
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/mapping/pose_graph_interface.h"
 #include "cartographer/mapping/proto/pose_graph.pb.h"
+#include "cartographer_ros/line_feature.h"
 // #include "cartographer/mapping/pose_graph.h"
 
 namespace cartographer_ros {
@@ -42,13 +43,18 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& pgm_filename,
                ::cartographer::io::FileWriter* file_writer);
 
+// 添加直线特征到SMAP文件的函数声明
+void AddLineFeaturesToSmap(const std::vector<cartographer_ros::LineFeature>& line_features,
+                         const std::string& smap_filename);
+
 // 添加PbstreamToSmap函数声明
-void PbstreamToSmap(const ::cartographer::io::Image& image, 
-                   double resolution, 
-                   const Eigen::Vector2d& origin, 
+void PbstreamToSmap(const ::cartographer::io::Image& image,
+                   double resolution,
+                   const Eigen::Vector2d& origin,
                    const std::string& smap_filename,
                    const std::vector<rbk::protocol::Message_MapPos>& valid_points,
-                   const std::vector<rbk::protocol::Message_MapRSSIPos>& landmark_rssi_pos_list);
+                   const std::vector<rbk::protocol::Message_MapRSSIPos>& landmark_rssi_pos_list,
+                   const std::vector<cartographer_ros::LineFeature>& line_features = {});
 
 }  // namespace cartographer_ros
 #endif  // CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ROS_MAP_H
