@@ -17,6 +17,8 @@ public:
 
 private:
   std::mt19937 random_generator_;
+  LSDConfig config_;
+  cv::Ptr<cv::LineSegmentDetector> lsd_detector_;
 };
 }  // namespace cartographer_ros
 

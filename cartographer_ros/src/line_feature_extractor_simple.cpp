@@ -23,6 +23,7 @@
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/3d/submap_3d.h"
 #include "cartographer_ros/ros_log_sink.h"
+#include "cartographer_ros/cv_lsd_detector.h"
 
 #include <rclcpp/rclcpp.hpp>
 #include <gflags/gflags.h>
@@ -116,9 +117,65 @@ void Run(const std::string& pbstream_filename, const double resolution)
   line_features = extractor.ExtractLineFeatures(gray_Mat, resolution, origin);
   LOG(INFO) << "直线特征提取完成，共提取 " << line_features.size() << " 条直线";
 
+  cartographer_ros::CvLsdDetector lsd_detector(config.lsd);
+  std::vector<cartographer_ros::LineFeature> lsd_lines;
+  lsd_lines = lsd_detector.DetectLines(gray_Mat, resolution);
+
   // 将直线画在image上面，根据不同的类别设定不同的颜色
   // 将直线画在image上面，根据不同的类别设定不同的颜色
   for (const auto& line : line_features)
+  {
+    // 根据线段类型设置颜色
+    cv::Scalar line_color;
+    int line_thickness = 2;
+
+    switch (line.type)
+    {
+      case cartographer_ros::LineType::WALL:
+        line_color = cv::Scalar(0, 0, 255);  // 红色 - 墙壁
+        line_thickness = 3;
+        break;
+      case cartographer_ros::LineType::CORRIDOR:
+        line_color = cv::Scalar(0, 255, 0);  // 绿色 - 走廊
+        line_thickness = 2;
+        break;
+      case cartographer_ros::LineType::OBSTACLE:
+        line_color = cv::Scalar(0, 255, 255);  // 黄色 - 障碍物边界
+        line_thickness = 2;
+        break;
+      case cartographer_ros::LineType::STRUCTURE:
+        line_color = cv::Scalar(255, 0, 0);  // 蓝色 - 结构线
+        line_thickness = 0;
+        break;
+      default:
+        line_color = cv::Scalar(128, 128, 128);  // 灰色 - 未知类型
+        line_thickness = 1;
+        break;
+    }
+
+    // 将世界坐标转换为图像坐标
+    // 图像坐标 x = (世界坐标 x - origin.x) / resolution
+    // 图像坐标 y = image.height() - (世界坐标 y - origin.y) / resolution
+    int x1 = static_cast<int>((line.start_point.x()));
+    int y1 = static_cast<int>((line.start_point.y()));
+    int x2 = static_cast<int>((line.end_point.x()));
+    int y2 = static_cast<int>((line.end_point.y()));
+
+    // 绘制直线
+    cv::line(originMat, cv::Point(x1, y1), cv::Point(x2, y2), line_color, line_thickness);
+
+    // 可选：绘制端点
+    cv::circle(originMat, cv::Point(x1, y1), 3, line_color, -1);
+    cv::circle(originMat, cv::Point(x2, y2), 3, line_color, -1);
+
+    // 可选：在直线中心标注线段ID或类型
+    int cx = (x1 + x2) / 2;
+    int cy = (y1 + y2) / 2;
+    std::string label = std::to_string(static_cast<int>(line.type));
+    cv::putText(originMat, label, cv::Point(cx + 5, cy - 5), cv::FONT_HERSHEY_SIMPLEX, 0.3, line_color, 1);
+  }
+
+  for (const auto& line : lsd_lines)
   {
     // 根据线段类型设置颜色
     cv::Scalar line_color;
@@ -151,10 +208,10 @@ void Run(const std::string& pbstream_filename, const double resolution)
     // 将世界坐标转换为图像坐标
     // 图像坐标 x = (世界坐标 x - origin.x) / resolution
     // 图像坐标 y = image.height() - (世界坐标 y - origin.y) / resolution
-    int x1 = static_cast<int>((line.start_point.x()) / resolution);
-    int y1 = static_cast<int>((line.start_point.y()) / resolution);
-    int x2 = static_cast<int>((line.end_point.x()) / resolution);
-    int y2 = static_cast<int>((line.end_point.y()) / resolution);
+    int x1 = static_cast<int>(line.start_point.x());
+    int y1 = static_cast<int>(line.start_point.y());
+    int x2 = static_cast<int>(line.end_point.x());
+    int y2 = static_cast<int>(line.end_point.y());
 
     // 绘制直线
     cv::line(originMat, cv::Point(x1, y1), cv::Point(x2, y2), line_color, line_thickness);
