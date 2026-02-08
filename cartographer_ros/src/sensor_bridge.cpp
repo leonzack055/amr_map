@@ -185,7 +185,7 @@ void SensorBridge::HandlePointCloud2Message(
   carto::sensor::PointCloudWithIntensities point_cloud;
   carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
-  HandleRangefinder(sensor_id, time, msg->header.frame_id, point_cloud.points);
+  HandleRangefinder(sensor_id, time, msg->header.frame_id, point_cloud.points, point_cloud.intensities);
 }
 
 const TfBridge& SensorBridge::tf_bridge() const { return tf_bridge_; }
@@ -206,6 +206,11 @@ void SensorBridge::HandleLaserScan(
         points.points.size() * (i + 1) / num_subdivisions_per_laser_scan_;
     carto::sensor::TimedPointCloud subdivision(
         points.points.begin() + start_index, points.points.begin() + end_index);
+    std::vector<float> subdivision_intensities;
+    subdivision_intensities.reserve(end_index - start_index);
+    for (size_t j = start_index; j != end_index; ++j) {
+      subdivision_intensities.push_back(points.intensities[j]);
+    }
     if (start_index == end_index) {
       continue;
     }
@@ -228,19 +233,20 @@ void SensorBridge::HandleLaserScan(
       point.time -= time_to_subdivision_end;
     }
     CHECK_EQ(subdivision.back().time, 0.f);
-    HandleRangefinder(sensor_id, subdivision_time, frame_id, subdivision);
+    HandleRangefinder(sensor_id, subdivision_time, frame_id, subdivision, subdivision_intensities);
   }
 }
 
 void SensorBridge::HandleRangefinder(
     const std::string& sensor_id, const carto::common::Time time,
-    const std::string& frame_id, const carto::sensor::TimedPointCloud& ranges) {
+    const std::string& frame_id, const carto::sensor::TimedPointCloud& ranges,
+    const std::vector<float>& intensities) {
   if (!ranges.empty()) {
     CHECK_LE(ranges.back().time, 0.f);
   }
 
   // This was added to get rid of the TimedPointCloudData warning for a missing argument
-  std::vector<float> intensities_;
+  std::vector<float> intensities_ = intensities;
 
   const auto sensor_to_tracking =
       tf_bridge_.LookupToTracking(time, CheckNoLeadingSlash(frame_id));

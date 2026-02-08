@@ -135,6 +135,9 @@ NodeId PoseGraph2D::AppendNode(
   }
   const NodeId node_id = data_.trajectory_nodes.Append(
       trajectory_id, TrajectoryNode{constant_data, optimized_pose});
+  CHECK(
+      constant_data->filtered_gravity_aligned_point_cloud.intensities().size() ==
+      constant_data->filtered_gravity_aligned_point_cloud.points().size());
   ++data_.num_trajectory_nodes;
   // Test if the 'insertion_submap.back()' is one we never saw before.
   if (data_.submap_data.SizeOfTrajectoryOrZero(trajectory_id) == 0 ||
@@ -479,7 +482,7 @@ void PoseGraph2D::HandleWorkQueue(
     absl::MutexLock locker(&mutex_);
     // 进入剪枝流程，此时workqueue卡在HandleWorkQueue()处；新加入AddNode()数据也因为mutex锁而被卡住
     // 所以此时不会有晚于优化时刻的Node,Submap和Constraints的当前图中。未处理的约束计算，新子图添加全部
-    // 的WorkQueue中；等待DrainQueue来进行处理； 
+    // 的WorkQueue中；等待DrainQueue来进行处理；
     for (const Constraint& constraint : result) {
       UpdateTrajectoryConnectivity(constraint);
     }

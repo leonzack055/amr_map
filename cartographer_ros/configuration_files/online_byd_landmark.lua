@@ -25,7 +25,7 @@ options = {
   provide_odom_frame = true,
   publish_frame_projected_to_2d = false,
   use_odometry = true,
-  use_pose_extrapolator = true,
+  use_pose_extrapolator = false,
   use_nav_sat = false,
   use_landmarks = false,
   num_laser_scans = 1,
@@ -75,8 +75,8 @@ POSE_GRAPH.constraint_builder.min_score = 0.65
 POSE_GRAPH.optimization_problem.acceleration_weight = 0.1 * 1e3
 POSE_GRAPH.optimization_problem.rotation_weight = 0.1 * 3e5
 -- ignore wheels in optimization
-POSE_GRAPH.optimization_problem.odometry_translation_weight = 0
-POSE_GRAPH.optimization_problem.odometry_rotation_weight = 0
+POSE_GRAPH.optimization_problem.odometry_translation_weight = 3e4
+POSE_GRAPH.optimization_problem.odometry_rotation_weight = 3e4
 -- optimization problem setting
 POSE_GRAPH.optimization_problem.log_solver_summary = true
 POSE_GRAPH.optimization_problem.huber_scale = 1e2

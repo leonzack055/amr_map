@@ -84,7 +84,7 @@ def generate_launch_description():
         package = 'rviz2',
         executable = 'rviz2',
         on_exit = Shutdown(),
-        arguments = ['-d', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files/demo_2d.rviz'],
+        arguments = ['-d', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files/demo_docker2d.rviz'],
         parameters = [{'use_sim_time': True}],
     )
 
@@ -98,5 +98,5 @@ def generate_launch_description():
         # Nodes
         cartographer_node,
         cartographer_occupancy_grid_node,
-        rviz_node,
+        # rviz_node,
     ])

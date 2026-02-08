@@ -82,7 +82,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(gflags REQUIRED)
 find_package(glog REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common)
+find_package(PCL REQUIRED COMPONENTS common io filters geometry sample_consensus features kdtree octree search surface REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(ros_environment REQUIRED)
@@ -146,6 +146,7 @@ add_library(${PROJECT_NAME} SHARED
   src/line_feature_utils.cpp
   src/line_feature_extractor.cpp
   src/cv_lsd_detector.cpp
+  src/collected_pointcloud.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -183,6 +184,15 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME} PRIVATE
   ${CAIRO_LIBRARIES}
   pcl_common
+  pcl_io
+  pcl_filters
+  pcl_geometry
+  pcl_features
+  pcl_sample_consensus
+  pcl_kdtree
+  pcl_octree
+  pcl_search
+  pcl_surface
   ${std_msgs_TARGETS}
   tf2::tf2
   tf2_eigen::tf2_eigen
@@ -318,6 +328,19 @@ target_link_libraries(cartographer_line_feature_extractor PRIVATE
   ${OpenCV_LIBS}
 )
 
+add_executable(cartographer_pointcloud_executor src/collected_pointcloud_executor.cpp)
+target_include_directories(cartographer_pointcloud_executor PRIVATE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
+)
+target_link_libraries(cartographer_pointcloud_executor PRIVATE
+  ${PROJECT_NAME}
+  gflags
+  rclcpp::rclcpp
+  ${OpenCV_LIBS}
+)
+
 # 添加最小化测试程序
 add_executable(cartographer_minimal_test src/minimal_test.cpp)
 target_link_libraries(cartographer_minimal_test PRIVATE)
@@ -371,6 +394,7 @@ install(TARGETS
   cartographer_pbstream_map_publisher
   cartographer_pbstream_to_ros_map
   cartographer_line_feature_extractor
+  cartographer_pointcloud_executor
   cartographer_rosbag_validate
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )

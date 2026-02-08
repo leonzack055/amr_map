@@ -53,6 +53,7 @@ class PointCloud {
   ConstIterator end() const;
 
   void push_back(PointType value);
+  std::vector<float>& mutable_intensities();
 
   // Creates a PointCloud consisting of all the points for which `predicate`
   // returns true, together with the corresponding intensities.

@@ -75,7 +75,14 @@ void Run(const std::string& pbstream_filename, const double resolution)
   cv::cvtColor(gray_Mat, originMat, cv::COLOR_GRAY2BGR);
   //   cv::imwrite("testMap2.png", originMat);
 
-  // 计算地图的原点，此原点为图像左下角点相对于`map_frame`的坐标
+  // 计算地图的原点，这里假设地图的原点在左上角； 左上角的世界坐标，
+  // 这里是以 x 向上； y 向左 为世界坐标； z 向屏幕，满足右手定则
+  /*
+        x ^
+          |
+          |
+  y <-----|
+  */
   const Eigen::Vector2d origin(-result.origin.x() * resolution, (result.origin.y() - image.height()) * resolution);
   // 将image转换成cv::Mat 然后提取直线
   // 直线特征提取
@@ -88,14 +95,16 @@ void Run(const std::string& pbstream_filename, const double resolution)
 
   // 预处理配置
   config.preprocessing.use_otsu_threshold = true;
+  config.preprocessing.manual_threshold = 86.0;  // 0.0 表示自动计算阈值
   config.preprocessing.enable_canny = true;
   config.preprocessing.canny_low_threshold = 50.0;
   config.preprocessing.canny_high_threshold = 150.0;
   config.preprocessing.enable_debug_output = true;
+  config.preprocessing.enable_morphology = false;
 
   // 霍夫变换配置
   config.hough_transform.enabled = false;
-  config.hough_transform.threshold = 50;
+  config.hough_transform.threshold = 48;
   config.hough_transform.min_line_length_meters = 0.5;
   config.hough_transform.confidence_threshold = 0.7;
 
@@ -117,9 +126,14 @@ void Run(const std::string& pbstream_filename, const double resolution)
   line_features = extractor.ExtractLineFeatures(gray_Mat, resolution, origin);
   LOG(INFO) << "直线特征提取完成，共提取 " << line_features.size() << " 条直线";
 
+  // LSD 图像预处理
+  cv::Mat bin_Mat;
+  double otsu_threshold = config.preprocessing.manual_threshold;
+  LOG(INFO) << "Otsu阈值: " << otsu_threshold;
+  threshold(gray_Mat, bin_Mat, otsu_threshold, 255, THRESH_BINARY);
   cartographer_ros::CvLsdDetector lsd_detector(config.lsd);
   std::vector<cartographer_ros::LineFeature> lsd_lines;
-  lsd_lines = lsd_detector.DetectLines(gray_Mat, resolution);
+  lsd_lines = lsd_detector.DetectLines(bin_Mat, resolution);
 
   // 将直线画在image上面，根据不同的类别设定不同的颜色
   // 将直线画在image上面，根据不同的类别设定不同的颜色
@@ -239,16 +253,15 @@ void Run(const std::string& pbstream_filename, const double resolution)
 
 int main(int argc, char** argv)
 {
-    // 初始化ROS2
+  // 初始化ROS2
   rclcpp::init(argc, argv);
   // 初始化Google Flags和Logging
   google::AllowCommandLineReparsing();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
-
   // 创建节点
-   cartographer_ros::ScopedRosLogSink ros_log_sink;
+  cartographer_ros::ScopedRosLogSink ros_log_sink;
   auto node = rclcpp::Node::make_shared("line_feature_extractor_simple");
 
   RCLCPP_INFO(node->get_logger(), "Line Feature Extractor Simple Version");

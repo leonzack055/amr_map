@@ -103,7 +103,8 @@ cv::Mat ImagePreprocessor::ApplyThreshold(const cv::Mat& grayscale) {
   
   if (config_.use_otsu_threshold) {
     // 全局Otsu阈值
-    double otsu_threshold = CalculateOtsuThreshold(grayscale);
+    // double otsu_threshold = CalculateOtsuThreshold(grayscale);
+    double otsu_threshold = config_.manual_threshold;
     LOG(INFO) << "Otsu阈值: " << otsu_threshold;
     threshold(grayscale, binary, otsu_threshold, 255, THRESH_BINARY);
   } else {

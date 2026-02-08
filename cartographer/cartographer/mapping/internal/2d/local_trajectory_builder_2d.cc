@@ -105,6 +105,7 @@ std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
 LocalTrajectoryBuilder2D::AddRangeData(
     const std::string& sensor_id,
     const sensor::TimedPointCloudData& unsynchronized_data) {
+  CHECK(unsynchronized_data.intensities.size() > 0);
   auto synchronized_data =
       range_data_collator_.AddRangeData(sensor_id, unsynchronized_data);
   if (synchronized_data.ranges.empty()) {
@@ -165,6 +166,7 @@ LocalTrajectoryBuilder2D::AddRangeData(
   for (size_t i = 0; i < synchronized_data.ranges.size(); ++i) {
     const sensor::TimedRangefinderPoint& hit =
         synchronized_data.ranges[i].point_time;
+    float hit_intensity = synchronized_data.ranges[i].intensity;
     const Eigen::Vector3f origin_in_local =
         range_data_poses[i] *
         synchronized_data.origins.at(synchronized_data.ranges[i].origin_index);
@@ -174,12 +176,16 @@ LocalTrajectoryBuilder2D::AddRangeData(
     const float range = delta.norm();
     if (range >= options_.min_range()) {
       if (range <= options_.max_range()) {
+        // 修改新增加入intensity
         accumulated_range_data_.returns.push_back(hit_in_local);
+        accumulated_range_data_.returns.mutable_intensities().push_back(
+            hit_intensity);
       } else {
         hit_in_local.position =
             origin_in_local +
             options_.missing_data_ray_length() / range * delta;
         accumulated_range_data_.misses.push_back(hit_in_local);
+        accumulated_range_data_.misses.mutable_intensities().push_back(0.0f);
       }
     }
   }

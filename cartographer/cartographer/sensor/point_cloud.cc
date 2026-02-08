@@ -42,6 +42,9 @@ const std::vector<PointCloud::PointType>& PointCloud::points() const {
 const std::vector<float>& PointCloud::intensities() const {
   return intensities_;
 }
+
+std::vector<float>& PointCloud::mutable_intensities() { return intensities_; }
+
 const PointCloud::PointType& PointCloud::operator[](const size_t index) const {
   return points_[index];
 }
