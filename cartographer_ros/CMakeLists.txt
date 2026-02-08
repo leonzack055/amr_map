@@ -97,6 +97,7 @@ find_package(tf2_ros REQUIRED)
 find_package(urdf REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(landmark_localization REQUIRED)
+find_package(amr_reflector_noise_handling REQUIRED)
 find_package(Protobuf REQUIRED)
 # 新增
 find_package(rclcpp_lifecycle REQUIRED)
@@ -273,6 +274,28 @@ target_link_libraries(cartographer_lifecycle_offline_node PRIVATE
   ${Boost_LIBRARIES}
 )
 
+# 自定义lifecycle_node 和 lifecycle_node_manager 进行生命周期管理
+add_executable(cartographer_offline_reflector_mapping_node src/offline_reflector_mapping_node.cpp)
+target_include_directories(cartographer_offline_reflector_mapping_node PRIVATE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
+  "${Boost_INCLUDE_DIRS}"
+)
+target_compile_definitions(cartographer_offline_reflector_mapping_node PRIVATE "-DUSE_URDF_H_FILES")
+target_link_libraries(cartographer_offline_reflector_mapping_node PRIVATE
+  ${PROJECT_NAME}
+  ${byd_mapbuilder_msgs_TARGETS}
+  ${lifecycle_msgs_TARGETS}
+  cartographer
+  gflags
+  rclcpp::rclcpp
+  urdf::urdf
+  rclcpp_lifecycle::rclcpp_lifecycle
+  amr_reflector_noise_handling::reflector_noise_lib
+  ${Boost_LIBRARIES}
+)
+
 add_executable(cartographer_assets_writer src/assets_writer_main.cpp)
 target_include_directories(cartographer_assets_writer PRIVATE
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -376,6 +399,7 @@ if($ENV{ROS_DISTRO} MATCHES "humble" OR $ENV{ROS_DISTRO} MATCHES "iron")
   target_compile_definitions(cartographer_rosbag_validate PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
   target_compile_definitions(cartographer_offline_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
   target_compile_definitions(cartographer_lifecycle_offline_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
+  target_compile_definitions(cartographer_offline_reflector_mapping_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
 endif()
 
 install(TARGETS ${PROJECT_NAME}
@@ -389,6 +413,7 @@ install(TARGETS
   cartographer_node
   cartographer_occupancy_grid_node
   cartographer_offline_node
+  cartographer_offline_reflector_mapping_node
   cartographer_lifecycle_offline_node
   cartographer_assets_writer
   cartographer_pbstream_map_publisher
@@ -427,6 +452,7 @@ ament_export_dependencies(
   rclcpp_lifecycle
   lifecycle_msgs
   landmark_localization
+  amr_reflector_noise_handling
   OpenCV
 )
 ament_package()

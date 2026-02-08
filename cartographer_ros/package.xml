@@ -105,6 +105,7 @@
   <depend>libboost-iostreams-dev</depend>
   <depend>libboost-filesystem-dev</depend>
   <depend>landmark_localization</depend>
+  <depend>amr_reflector_noise_handling</depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
