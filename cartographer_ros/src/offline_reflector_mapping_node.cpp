@@ -20,9 +20,11 @@ Modified: !date!
 #include <condition_variable>
 #include <deque>
 
+#include "cartographer/mapping/map_builder.h"
 #include "cartographer_ros/node.h"
 #include "cartographer_ros/offline_node.h"
 #include "cartographer_ros/playable_bag.h"
+#include "cartographer_ros/ros_log_sink.h"
 #include "cartographer_ros/urdf_reader.h"
 #include "gflags/gflags.h"
 #include "rosgraph_msgs/msg/clock.hpp"
@@ -39,7 +41,6 @@ Modified: !date!
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <unistd.h>  // STDIN_FILENO
-
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <iostream>
@@ -112,8 +113,9 @@ DEFINE_double(skip_seconds, 0,
               "Optional amount of seconds to skip from the beginning "
               "(i.e. when the earliest bag starts.). ");
 
-namespace cartographer_ros {
+using namespace amr_reflector_noise_handling;
 
+namespace cartographer_ros {
 constexpr char kClockTopic[] = "clock";
 constexpr char kTfStaticTopic[] = "/tf_static";
 constexpr char kTfTopic[] = "/tf";
@@ -152,11 +154,11 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
                                  FLAGS_configuration_basenames.end(), regex,
                                  -1),
       std::sregex_token_iterator());
-
+  // 1.1 单个包加载，一个配置文件
   std::vector<TrajectoryOptions> bag_trajectory_options(1);
   std::tie(node_options, bag_trajectory_options.at(0)) =
       LoadOptions(FLAGS_configuration_directory, configuration_basenames.at(0));
-
+  // 1.2 多个包加载不同的配置文件，获者将一个配置文件复制多份；当作不同轨迹的配置。
   for (size_t bag_index = 1; bag_index < bag_filenames.size(); ++bag_index) {
     TrajectoryOptions current_trajectory_options;
     if (bag_index < configuration_basenames.size()) {
@@ -170,17 +172,18 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
   if (bag_filenames.size() > 0) {
     CHECK_EQ(bag_trajectory_options.size(), bag_filenames.size());
   }
-
-  // Since we preload the transform buffer, we should never have to wait for a
-  // transform. When we finish processing the bag, we will simply drop any
-  // remaining sensor data that cannot be transformed due to missing transforms.
+  // 1. ---------------- 完成 map_builder 相关配置 ---------------------------
+  // 这里对所有包/urdf 一次性提取 /tf_static所以认为其循环时间为0；在进行bag播放前己经完成了buffer
+  // 包内的/tf，动态/tf动态变换的/tf只关于/odom->/base_link; 也可以提前加载； 但实际上它在连续
+  // 过程中，它的查询时段只受 tf_buffer的缓存时间的影响。
   node_options.lookup_transform_timeout_sec = 0.;
-
   auto map_builder = map_builder_factory(node_options.map_builder_options);
-
+  
+  // 2. ---------------- 时序说明 ----------------------------------
+  // 2.1 使用系统时间进行建图任务开启，以监听处理耗时
   const std::chrono::time_point<std::chrono::steady_clock> start_time =
       std::chrono::steady_clock::now();
-
+  // 2.2 建图过程中tf_buffer询，使用get_clock() sim_time时使用bag中的记录时间--clock
   std::shared_ptr<tf2_ros::Buffer> tf_buffer =
       std::make_shared<tf2_ros::Buffer>(cartographer_offline_node->get_clock(),
                                         tf2::durationFromSec(10),
@@ -188,7 +191,6 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
 
   // 从urdf文件中读取 对应的static_transforms变化
   std::vector<geometry_msgs::msg::TransformStamped> urdf_transforms;
-
   if (!FLAGS_urdf_filenames.empty()) {
     std::vector<std::string> urdf_filenames(
         std::sregex_token_iterator(FLAGS_urdf_filenames.begin(),
@@ -206,30 +208,33 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
   // 变换，指为TF变换处理单独分配一个后台线程，与主线程分离运行
   tf_buffer->setUsingDedicatedThread(true);
 
-  // 创建cartographer节点，进行建图工作
+  // 创建cartographer节点
   Node node(node_options, std::move(map_builder), tf_buffer,
             cartographer_offline_node, FLAGS_collect_metrics);
   if (!FLAGS_load_state_filename.empty()) {
     node.LoadState(FLAGS_load_state_filename, FLAGS_load_frozen_state);
   }
-
+  // 发布动态 \tf; 因为可能存在odom->base_link的变换;
   rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher =
       cartographer_offline_node->create_publisher<tf2_msgs::msg::TFMessage>(
           kTfTopic, kLatestOnlyPublisherQueueSize);
-
+  // 创建消息 \tf_static 发布
   ::tf2_ros::StaticTransformBroadcaster static_tf_broadcaster(
       cartographer_offline_node);
-
+  // 2.3 创建时钟发布器，持续给use_sim_time情况下发布时终；
   rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_publisher =
       cartographer_offline_node->create_publisher<rosgraph_msgs::msg::Clock>(
           kClockTopic, kLatestOnlyPublisherQueueSize);
+  rosgraph_msgs::msg::Clock clock;  // 发布时钟的消息
+
   // 发布静态tf，从urdf文件中读取
   if (urdf_transforms.size() > 0) {
     static_tf_broadcaster.sendTransform(urdf_transforms);
   }
-
-  rosgraph_msgs::msg::Clock clock;
-
+  
+  // --------------------- 3. 传感器消息绑定 ---------------------
+  // 3.1 不周包使用不同消息名绑定。对于多bag包，那么消息会出现 bag_i_SenorId 这样的前缀
+  // 那么bag中对应的消息名，也应重新remapping
   std::vector<
       std::set<cartographer::mapping::TrajectoryBuilderInterface::SensorId>>
       bag_expected_sensor_ids;
@@ -244,11 +249,15 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
         node.ComputeDefaultSensorIdsForMultipleBags(bag_trajectory_options);
   }
   CHECK_EQ(bag_expected_sensor_ids.size(), bag_filenames.size());
-
+  // 3.2 将rosbag包加载到PlayableBagMultiplexer播放器，进行多包多机管理和播放
   std::map<std::pair<int /* bag_index */, std::string>,
            cartographer::mapping::TrajectoryBuilderInterface::SensorId>
       bag_topic_to_sensor_id;
   PlayableBagMultiplexer playable_bag_multiplexer(cartographer_offline_node);
+  // 3.3 sensorId绑定，将以包的顺序进行消息名替换；
+  // [{bagIdx}，bag_sensor_topic] = bag_{bagIdx+1}_{sensorId}
+  // notice: bag_sensor_topic="/bag_{bagIdx+1}_{sensorId}"
+  // 对于多个激光传感器的包其命名对sensorId进行累加，如 xx_scan_1, xx_scan_2
   for (size_t current_bag_index = 0; current_bag_index < bag_filenames.size();
        ++current_bag_index) {
     const std::string& bag_filename = bag_filenames.at(current_bag_index);
@@ -269,18 +278,13 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
       }
       bag_topic_to_sensor_id[bag_resolved_topic] = expected_sensor_id;
     }
-
+    // 提前加载kDelay秒数据到PlayableBag::messagebuffer中和TF消息到tf_buffer中；
     auto serializer = rclcpp::Serialization<tf2_msgs::msg::TFMessage>();
     playable_bag_multiplexer.AddPlayableBag(PlayableBag(
         bag_filename, current_bag_index, kDelay,
-        // PlayableBag::FilteringEarlyMessageHandler is used to get an early
-        // peek at the tf messages in the bag and insert them into 'tf_buffer'.
-        // When a message is retrieved by GetNextMessage() further below,
-        // we will have already inserted further 'kDelay' seconds worth of
-        // transforms into 'tf_buffer' via this lambda.
+        // PlayableBag::FilteringEarlyMessageHandler 提前加载kDelay秒数据，并过TFt
         [&tf_publisher, tf_buffer, cartographer_offline_node, serializer](
             std::shared_ptr<rosbag2_storage::SerializedBagMessage> msg) {
-          // TODO: filter bag msg per type ? Planned rosbag2 evolution ?
           if (msg->topic_name == kTfTopic ||
               msg->topic_name == kTfStaticTopic) {
             if (FLAGS_use_bag_transforms) {
@@ -290,10 +294,10 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
                 serializer.deserialize_message(&serialized_msg, &tf_message);
                 for (auto& transform : tf_message.transforms) {
                   try {
-                    // We need to keep 'tf_buffer' small because it becomes very
-                    // inefficient otherwise. We make sure that tf_messages are
-                    // published before any data messages, so that tf lookups
-                    // always work.
+                    // 当tf_buffer很大时O(1)+O(NlogN)的查询时间其实是很慢的，所以这里让tf_buffer
+                    // 时间尽量小； 而且对于静态发布，由其是多个包的情况下，应该提前加载；这样所有的
+                    // 静态tf都在缓存中，而carto通过tf_bridge查找的就是静态变换所以这里是提前加载
+                    // 包扩\tf也一样，可以通过提前加载，来保持插值稳定性； 但一般用不到。
                     tf_buffer->setTransform(transform, "unused_authority",
                                             msg->topic_name == kTfStaticTopic);
                   } catch (const tf2::TransformException& ex) {
@@ -314,6 +318,13 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
         }));
   }
 
+  // 3.3 绑定消息，由于传感器消息使用的是cartographer_ros中默认的消息名，所以
+  // 在使用此进程时需要进行topic名映射； 如 laserscan-->"/bag_{bagIdx+1}_scan"
+  // bag_topic_to_sensor_id[({bagIdx}，bag_sensor_topic)] =
+  // bag_{bagIdx+1}_{sensorId} 
+  // notice:
+  // 此处需要保证不同包中，消息名是不同的；这样在使用 --ros-args -remapping -r
+  // 时不会因为topic重名而出现错误映射。
   std::set<std::string> bag_topics;
   std::stringstream bag_topics_string;
   for (const auto& topic : playable_bag_multiplexer.topics()) {
@@ -323,6 +334,11 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     bag_topics.insert(resolved_topic);
     bag_topics_string << resolved_topic << ",";
   }
+  // 检查是否cartographer配置的传感器，成功与rosbag中的消息名进行绑定；是否存在未绑定的传感器
+  // 这里给了消息映射范式: 前面为carto程序处理的消息，后面为rosbag包中的消息；不同包消息不同名。
+  // 单包:  scan --> bag_scan_topic odom--> bag_odom_topic
+  // 多包: (1) bag_1_scan_0 --> bag1_frontscan_topic bag_1_scan1 -> bag1_backscan_topic
+  // (2) bag2_scan -> bag2_scan_topic bag2_odom -> bag2_odom_topic
   bool print_topics = false;
   for (const auto& entry : bag_topic_to_sensor_id) {
     const std::string& resolved_topic = entry.first.second;
@@ -336,7 +352,11 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     LOG(WARNING) << "Available topics in bag file(s) are "
                  << bag_topics_string.str();
   }
-
+  // 4. ---------------------- 处理消息生成轨迹 -------------------------
+  // 4.1
+  // 不同的包对应不同的轨迹，包的处理存在先后顺序，执行完一个包再进行执行下一个包
+  // 包的顺序决定map的坐标；而在PlayableBagMultiPlayer中执行顺序是倒序的，
+  // 最后一个包先进行消息提取。
   std::unordered_map<int, int> bag_index_to_trajectory_id;
   const rclcpp::Time begin_time =
       // If no bags were loaded, we cannot peek the time of first message.
@@ -355,12 +375,12 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
       rclcpp::Serialization<sensor_msgs::msg::NavSatFix>();
   auto landmark_list_serializer =
       rclcpp::Serialization<cartographer_ros_msgs::msg::LandmarkList>();
-
+  // 4.2 执行多包消息处理
   while (playable_bag_multiplexer.IsMessageAvailable()) {
     if (!::rclcpp::ok()) {
       return;
     }
-
+    // (1) 按顺序提取包内的消息；时间以bag录制时间为准
     const auto next_msg_tuple = playable_bag_multiplexer.GetNextMessage();
     const rosbag2_storage::SerializedBagMessage& msg =
         std::get<0>(next_msg_tuple);
@@ -368,6 +388,7 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     const std::string topic_type = std::get<2>(next_msg_tuple);
     const bool is_last_message_in_bag = std::get<3>(next_msg_tuple);
 
+    // notice: 从包哪里开始执行？ 可以跳过一定时间，对于IMU消息可用；一般采集前30s用于消息标定
 #ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
     if (msg.time_stamp <
         (begin_time.nanoseconds() +
@@ -381,11 +402,10 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
       continue;
     }
 #endif
-
+    // (2) 找到map_builder对应的graph.Trajectory
     int trajectory_id;
-    // Lazily add trajectories only when the first message arrives in order
-    // to avoid blocking the sensor queue.
     if (bag_index_to_trajectory_id.count(bag_index) == 0) {
+      // 懒加载，并且不进行消息监听；只进行建图过程中的消息发布；
       trajectory_id =
           node.AddOfflineTrajectory(bag_expected_sensor_ids.at(bag_index),
                                     bag_trajectory_options.at(bag_index));
@@ -399,14 +419,14 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     } else {
       trajectory_id = bag_index_to_trajectory_id.at(bag_index);
     }
-
+    // (3) 将bag_scan_topic 映射成carto默认的 bagIdx_sensorId的消息名
     const auto bag_topic = std::make_pair(
         bag_index, cartographer_offline_node->get_node_base_interface()
                        ->resolve_topic_or_service_name(msg.topic_name, false));
     auto it = bag_topic_to_sensor_id.find(bag_topic);
-
+    // (4) 消息处理，进行建图
     if (it != bag_topic_to_sensor_id.end()) {
-      const std::string& sensor_id = it->second.id;
+      const std::string& sensor_id = it->second.id; //sensorId消息名
 
       if (topic_type == "sensor_msgs/msg/LaserScan") {
         rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
@@ -462,14 +482,16 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
         node.HandleLandmarkMessage(trajectory_id, sensor_id, landmark_list_msg);
       }
     }
+    // (5) 进行时钟维护，使用ros2bag中记录时刻的时钟进行发布
 #ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
     clock.clock = rclcpp::Time(msg.time_stamp);
 #else
     clock.clock = rclcpp::Time(msg.recv_timestamp);
 #endif
     clock_publisher->publish(clock);
+    // (6) 进行在离线建图过程中可视化消息发布和接收消息处理
     rclcpp::spin_some(cartographer_offline_node);
-
+    // (7) 如果是包内最后一个消息，那么就将这个轨迹任务结束，按理说offline模式所有的submap都会成Finish状态
     if (is_last_message_in_bag) {
       node.FinishTrajectory(trajectory_id);
     }
@@ -513,13 +535,13 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
                         true /* include_unfinished_submaps */);
   }
   if (FLAGS_keep_running) {
-    LOG(INFO) << "Finished processing and waiting for shutdown.";
+    LOG(INFO) << "维持运行等待shutdown. 此时时间/clock应该不会发生变化";
     rclcpp::spin(cartographer_offline_node);
   }
+  // 到此时/clock时间停止，可以进行整个轨迹的回溯，交互进程也可展开
 }
 }  // namespace cartographer_ros
 
-using namespace amr_reflector_noise_handling;
 // 关闭终端行缓冲和回显，实现无回车读单个字符
 char get_char_without_enter() {
   struct termios old_attr, new_attr;
@@ -1419,6 +1441,23 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
+
+  google::AllowCommandLineReparsing();
+  google::InitGoogleLogging(argv[0]);
+  google::ParseCommandLineFlags(&argc, &argv, false);
+
+  cartographer_ros::ScopedRosLogSink ros_log_sink;
+
+  const cartographer_ros::MapBuilderFactory map_builder_factory =
+      [](const ::cartographer::mapping::proto::MapBuilderOptions&
+             map_builder_options) {
+        return ::cartographer::mapping::CreateMapBuilder(map_builder_options);
+      };
+
+  rclcpp::Node::SharedPtr cartographer_offline_node =
+      rclcpp::Node::make_shared("cartographer_offline_node");
+  cartographer_ros::RunOfflineNode(map_builder_factory,
+                                   cartographer_offline_node);
 
   auto node = std::make_shared<ReflectorNoiseBagNode>();
 

@@ -37,7 +37,11 @@ class PlayableBag {
   using FilteringEarlyMessageHandler =
       std::function<bool /* forward_message_to_buffer */ (
           std::shared_ptr<rosbag2_storage::SerializedBagMessage>)>;
-
+  /*
+   * desc: 以buffer_delay秒为批处理加载包中消息; 加载时间以记录时间为准;
+   * @param: filtering_early_message_handler 使用指针函数进行过滤准则判断，一般用于过滤
+   * tf 消息；
+   */
   PlayableBag(const std::string& bag_filename, int bag_id,
               rclcpp::Duration buffer_delay,
               FilteringEarlyMessageHandler filtering_early_message_handler);
@@ -56,6 +60,7 @@ class PlayableBag {
 
  private:
   void AdvanceOneMessage();
+  // 加载buffer_delay秒的消息到buffer_messages_;
   void AdvanceUntilMessageAvailable();
 
   std::unique_ptr<rosbag2_cpp::Reader> bag_reader_;
@@ -65,7 +70,7 @@ class PlayableBag {
   double duration_in_seconds_;
   int message_counter_;
   std::deque<rosbag2_storage::SerializedBagMessage> buffered_messages_;
-  const rclcpp::Duration  buffer_delay_;
+  const rclcpp::Duration  buffer_delay_; // 一次性是取多少个消息，对于多包play模式在处理中是批处理不是全加后处理
   FilteringEarlyMessageHandler filtering_early_message_handler_;
   std::set<std::string> topics_;
 };
@@ -78,6 +83,7 @@ class PlayableBagMultiplexer {
   // Returns the next message from the multiplexed (merge-sorted) message
   // stream, along with the bag id corresponding to the message, and whether
   // this was the last message in that bag.
+  // 返回: 1. rosbag2的标准消息 2. 当前消息所属的包 3. 消息类型名 4.是否为包中最后一个消息
   std::tuple<rosbag2_storage::SerializedBagMessage, int, std::string, bool> GetNextMessage();
 
   bool IsMessageAvailable() const;
