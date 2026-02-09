@@ -9,6 +9,7 @@ Modified: !date!
 */
 
 #include <errno.h>
+
 #include <string>
 #ifndef WIN32
 #include <sys/resource.h>
@@ -70,7 +71,6 @@ Modified: !date!
 #include "amr_reflector_noise_handling/types/msg_conversion.hpp"
 #include "amr_reflector_noise_handling/types/reflector_common.hpp"
 #include "amr_reflector_noise_handling/visualization_helper.hpp"
-
 #include "rclcpp/exceptions.hpp"
 
 DEFINE_bool(collect_metrics, false,
@@ -114,451 +114,10 @@ DEFINE_double(skip_seconds, 0,
               "(i.e. when the earliest bag starts.). ");
 
 using namespace amr_reflector_noise_handling;
-
-namespace cartographer_ros {
-constexpr char kClockTopic[] = "clock";
-constexpr char kTfStaticTopic[] = "/tf_static";
-constexpr char kTfTopic[] = "/tf";
-constexpr double kClockPublishFrequencySec = 1. / 30.;
-constexpr int kSingleThreaded = 1;
-// We publish tf messages one second earlier than other messages. Under
-// the assumption of higher frequency tf this should ensure that tf can
-// always interpolate.
-const rclcpp::Duration kDelay(1.0, 0);
-
-void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
-                    rclcpp::Node::SharedPtr cartographer_offline_node) {
-  CHECK(!FLAGS_configuration_directory.empty())
-      << "-configuration_directory is missing.";
-  LOG(WARNING) << "FLAGS_configuration_directory "
-               << FLAGS_configuration_directory;
-  CHECK(!FLAGS_configuration_basenames.empty())
-      << "-configuration_basenames is missing.";
-  LOG(WARNING) << "FLAGS_configuration_basenames "
-               << FLAGS_configuration_basenames;
-  CHECK(!(FLAGS_bag_filenames.empty() && FLAGS_load_state_filename.empty()))
-      << "-bag_filenames and -load_state_filename cannot both be unspecified.";
-  std::regex regex(",");
-  std::vector<std::string> bag_filenames;
-  if (!FLAGS_bag_filenames.empty()) {
-    std::regex regex(",");
-    std::vector<std::string> if_bag_filenames(
-        std::sregex_token_iterator(FLAGS_bag_filenames.begin(),
-                                   FLAGS_bag_filenames.end(), regex, -1),
-        std::sregex_token_iterator());
-    bag_filenames = if_bag_filenames;
-  }
-  cartographer_ros::NodeOptions node_options;
-  std::vector<std::string> configuration_basenames(
-      std::sregex_token_iterator(FLAGS_configuration_basenames.begin(),
-                                 FLAGS_configuration_basenames.end(), regex,
-                                 -1),
-      std::sregex_token_iterator());
-  // 1.1 单个包加载，一个配置文件
-  std::vector<TrajectoryOptions> bag_trajectory_options(1);
-  std::tie(node_options, bag_trajectory_options.at(0)) =
-      LoadOptions(FLAGS_configuration_directory, configuration_basenames.at(0));
-  // 1.2 多个包加载不同的配置文件，获者将一个配置文件复制多份；当作不同轨迹的配置。
-  for (size_t bag_index = 1; bag_index < bag_filenames.size(); ++bag_index) {
-    TrajectoryOptions current_trajectory_options;
-    if (bag_index < configuration_basenames.size()) {
-      std::tie(std::ignore, current_trajectory_options) = LoadOptions(
-          FLAGS_configuration_directory, configuration_basenames.at(bag_index));
-    } else {
-      current_trajectory_options = bag_trajectory_options.at(0);
-    }
-    bag_trajectory_options.push_back(current_trajectory_options);
-  }
-  if (bag_filenames.size() > 0) {
-    CHECK_EQ(bag_trajectory_options.size(), bag_filenames.size());
-  }
-  // 1. ---------------- 完成 map_builder 相关配置 ---------------------------
-  // 这里对所有包/urdf 一次性提取 /tf_static所以认为其循环时间为0；在进行bag播放前己经完成了buffer
-  // 包内的/tf，动态/tf动态变换的/tf只关于/odom->/base_link; 也可以提前加载； 但实际上它在连续
-  // 过程中，它的查询时段只受 tf_buffer的缓存时间的影响。
-  node_options.lookup_transform_timeout_sec = 0.;
-  auto map_builder = map_builder_factory(node_options.map_builder_options);
-  
-  // 2. ---------------- 时序说明 ----------------------------------
-  // 2.1 使用系统时间进行建图任务开启，以监听处理耗时
-  const std::chrono::time_point<std::chrono::steady_clock> start_time =
-      std::chrono::steady_clock::now();
-  // 2.2 建图过程中tf_buffer询，使用get_clock() sim_time时使用bag中的记录时间--clock
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer =
-      std::make_shared<tf2_ros::Buffer>(cartographer_offline_node->get_clock(),
-                                        tf2::durationFromSec(10),
-                                        cartographer_offline_node);
-
-  // 从urdf文件中读取 对应的static_transforms变化
-  std::vector<geometry_msgs::msg::TransformStamped> urdf_transforms;
-  if (!FLAGS_urdf_filenames.empty()) {
-    std::vector<std::string> urdf_filenames(
-        std::sregex_token_iterator(FLAGS_urdf_filenames.begin(),
-                                   FLAGS_urdf_filenames.end(), regex, -1),
-        std::sregex_token_iterator());
-    for (const auto& urdf_filename : urdf_filenames) {
-      const auto current_urdf_transforms =
-          ReadStaticTransformsFromUrdf(urdf_filename, tf_buffer);
-      urdf_transforms.insert(urdf_transforms.end(),
-                             current_urdf_transforms.begin(),
-                             current_urdf_transforms.end());
-    }
-  }
-  // 开启 dedicated thread 用于 tf
-  // 变换，指为TF变换处理单独分配一个后台线程，与主线程分离运行
-  tf_buffer->setUsingDedicatedThread(true);
-
-  // 创建cartographer节点
-  Node node(node_options, std::move(map_builder), tf_buffer,
-            cartographer_offline_node, FLAGS_collect_metrics);
-  if (!FLAGS_load_state_filename.empty()) {
-    node.LoadState(FLAGS_load_state_filename, FLAGS_load_frozen_state);
-  }
-  // 发布动态 \tf; 因为可能存在odom->base_link的变换;
-  rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher =
-      cartographer_offline_node->create_publisher<tf2_msgs::msg::TFMessage>(
-          kTfTopic, kLatestOnlyPublisherQueueSize);
-  // 创建消息 \tf_static 发布
-  ::tf2_ros::StaticTransformBroadcaster static_tf_broadcaster(
-      cartographer_offline_node);
-  // 2.3 创建时钟发布器，持续给use_sim_time情况下发布时终；
-  rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_publisher =
-      cartographer_offline_node->create_publisher<rosgraph_msgs::msg::Clock>(
-          kClockTopic, kLatestOnlyPublisherQueueSize);
-  rosgraph_msgs::msg::Clock clock;  // 发布时钟的消息
-
-  // 发布静态tf，从urdf文件中读取
-  if (urdf_transforms.size() > 0) {
-    static_tf_broadcaster.sendTransform(urdf_transforms);
-  }
-  
-  // --------------------- 3. 传感器消息绑定 ---------------------
-  // 3.1 不周包使用不同消息名绑定。对于多bag包，那么消息会出现 bag_i_SenorId 这样的前缀
-  // 那么bag中对应的消息名，也应重新remapping
-  std::vector<
-      std::set<cartographer::mapping::TrajectoryBuilderInterface::SensorId>>
-      bag_expected_sensor_ids;
-  if (configuration_basenames.size() == 1) {
-    const auto current_bag_expected_sensor_ids =
-        node.ComputeDefaultSensorIdsForMultipleBags(
-            {bag_trajectory_options.front()});
-    bag_expected_sensor_ids = {bag_filenames.size(),
-                               current_bag_expected_sensor_ids.front()};
-  } else {
-    bag_expected_sensor_ids =
-        node.ComputeDefaultSensorIdsForMultipleBags(bag_trajectory_options);
-  }
-  CHECK_EQ(bag_expected_sensor_ids.size(), bag_filenames.size());
-  // 3.2 将rosbag包加载到PlayableBagMultiplexer播放器，进行多包多机管理和播放
-  std::map<std::pair<int /* bag_index */, std::string>,
-           cartographer::mapping::TrajectoryBuilderInterface::SensorId>
-      bag_topic_to_sensor_id;
-  PlayableBagMultiplexer playable_bag_multiplexer(cartographer_offline_node);
-  // 3.3 sensorId绑定，将以包的顺序进行消息名替换；
-  // [{bagIdx}，bag_sensor_topic] = bag_{bagIdx+1}_{sensorId}
-  // notice: bag_sensor_topic="/bag_{bagIdx+1}_{sensorId}"
-  // 对于多个激光传感器的包其命名对sensorId进行累加，如 xx_scan_1, xx_scan_2
-  for (size_t current_bag_index = 0; current_bag_index < bag_filenames.size();
-       ++current_bag_index) {
-    const std::string& bag_filename = bag_filenames.at(current_bag_index);
-    if (!rclcpp::ok()) {
-      return;
-    }
-    for (const auto& expected_sensor_id :
-         bag_expected_sensor_ids.at(current_bag_index)) {
-      LOG(INFO) << "expected_sensor_id.id " << expected_sensor_id.id;
-      const auto bag_resolved_topic = std::make_pair(
-          static_cast<int>(current_bag_index), "/" + expected_sensor_id.id);
-      if (bag_topic_to_sensor_id.count(bag_resolved_topic) != 0) {
-        LOG(ERROR) << "Sensor /" << expected_sensor_id.id << " of bag "
-                   << current_bag_index << " resolves to topic "
-                   << bag_resolved_topic.second << " which is already used by "
-                   << " sensor "
-                   << bag_topic_to_sensor_id.at(bag_resolved_topic).id;
-      }
-      bag_topic_to_sensor_id[bag_resolved_topic] = expected_sensor_id;
-    }
-    // 提前加载kDelay秒数据到PlayableBag::messagebuffer中和TF消息到tf_buffer中；
-    auto serializer = rclcpp::Serialization<tf2_msgs::msg::TFMessage>();
-    playable_bag_multiplexer.AddPlayableBag(PlayableBag(
-        bag_filename, current_bag_index, kDelay,
-        // PlayableBag::FilteringEarlyMessageHandler 提前加载kDelay秒数据，并过TFt
-        [&tf_publisher, tf_buffer, cartographer_offline_node, serializer](
-            std::shared_ptr<rosbag2_storage::SerializedBagMessage> msg) {
-          if (msg->topic_name == kTfTopic ||
-              msg->topic_name == kTfStaticTopic) {
-            if (FLAGS_use_bag_transforms) {
-              tf2_msgs::msg::TFMessage tf_message;
-              rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
-              try {
-                serializer.deserialize_message(&serialized_msg, &tf_message);
-                for (auto& transform : tf_message.transforms) {
-                  try {
-                    // 当tf_buffer很大时O(1)+O(NlogN)的查询时间其实是很慢的，所以这里让tf_buffer
-                    // 时间尽量小； 而且对于静态发布，由其是多个包的情况下，应该提前加载；这样所有的
-                    // 静态tf都在缓存中，而carto通过tf_bridge查找的就是静态变换所以这里是提前加载
-                    // 包扩\tf也一样，可以通过提前加载，来保持插值稳定性； 但一般用不到。
-                    tf_buffer->setTransform(transform, "unused_authority",
-                                            msg->topic_name == kTfStaticTopic);
-                  } catch (const tf2::TransformException& ex) {
-                    LOG(WARNING) << ex.what();
-                  }
-                }
-                tf_publisher->publish(tf_message);
-              } catch (const rclcpp::exceptions::RCLError& rcl_error) {
-                return true;
-              }
-            }
-            // Tell 'PlayableBag' to filter the tf message since there is no
-            // further use for it.
-            return false;
-          } else {
-            return true;
-          }
-        }));
-  }
-
-  // 3.3 绑定消息，由于传感器消息使用的是cartographer_ros中默认的消息名，所以
-  // 在使用此进程时需要进行topic名映射； 如 laserscan-->"/bag_{bagIdx+1}_scan"
-  // bag_topic_to_sensor_id[({bagIdx}，bag_sensor_topic)] =
-  // bag_{bagIdx+1}_{sensorId} 
-  // notice:
-  // 此处需要保证不同包中，消息名是不同的；这样在使用 --ros-args -remapping -r
-  // 时不会因为topic重名而出现错误映射。
-  std::set<std::string> bag_topics;
-  std::stringstream bag_topics_string;
-  for (const auto& topic : playable_bag_multiplexer.topics()) {
-    std::string resolved_topic =
-        cartographer_offline_node->get_node_base_interface()
-            ->resolve_topic_or_service_name(topic, false);
-    bag_topics.insert(resolved_topic);
-    bag_topics_string << resolved_topic << ",";
-  }
-  // 检查是否cartographer配置的传感器，成功与rosbag中的消息名进行绑定；是否存在未绑定的传感器
-  // 这里给了消息映射范式: 前面为carto程序处理的消息，后面为rosbag包中的消息；不同包消息不同名。
-  // 单包:  scan --> bag_scan_topic odom--> bag_odom_topic
-  // 多包: (1) bag_1_scan_0 --> bag1_frontscan_topic bag_1_scan1 -> bag1_backscan_topic
-  // (2) bag2_scan -> bag2_scan_topic bag2_odom -> bag2_odom_topic
-  bool print_topics = false;
-  for (const auto& entry : bag_topic_to_sensor_id) {
-    const std::string& resolved_topic = entry.first.second;
-    if (bag_topics.count(resolved_topic) == 0) {
-      LOG(WARNING) << "Expected resolved topic \"" << resolved_topic
-                   << "\" not found in bag file(s).";
-      print_topics = true;
-    }
-  }
-  if (print_topics) {
-    LOG(WARNING) << "Available topics in bag file(s) are "
-                 << bag_topics_string.str();
-  }
-  // 4. ---------------------- 处理消息生成轨迹 -------------------------
-  // 4.1
-  // 不同的包对应不同的轨迹，包的处理存在先后顺序，执行完一个包再进行执行下一个包
-  // 包的顺序决定map的坐标；而在PlayableBagMultiPlayer中执行顺序是倒序的，
-  // 最后一个包先进行消息提取。
-  std::unordered_map<int, int> bag_index_to_trajectory_id;
-  const rclcpp::Time begin_time =
-      // If no bags were loaded, we cannot peek the time of first message.
-      playable_bag_multiplexer.IsMessageAvailable()
-          ? playable_bag_multiplexer.PeekMessageTime()
-          : rclcpp::Time();
-
-  auto laser_scan_serializer =
-      rclcpp::Serialization<sensor_msgs::msg::LaserScan>();
-  auto multi_echo_laser_scan_serializer =
-      rclcpp::Serialization<sensor_msgs::msg::MultiEchoLaserScan>();
-  auto pcl2_serializer = rclcpp::Serialization<sensor_msgs::msg::PointCloud2>();
-  auto imu_serializer = rclcpp::Serialization<sensor_msgs::msg::Imu>();
-  auto odom_serializer = rclcpp::Serialization<nav_msgs::msg::Odometry>();
-  auto nav_sat_fix_serializer =
-      rclcpp::Serialization<sensor_msgs::msg::NavSatFix>();
-  auto landmark_list_serializer =
-      rclcpp::Serialization<cartographer_ros_msgs::msg::LandmarkList>();
-  // 4.2 执行多包消息处理
-  while (playable_bag_multiplexer.IsMessageAvailable()) {
-    if (!::rclcpp::ok()) {
-      return;
-    }
-    // (1) 按顺序提取包内的消息；时间以bag录制时间为准
-    const auto next_msg_tuple = playable_bag_multiplexer.GetNextMessage();
-    const rosbag2_storage::SerializedBagMessage& msg =
-        std::get<0>(next_msg_tuple);
-    const int bag_index = std::get<1>(next_msg_tuple);
-    const std::string topic_type = std::get<2>(next_msg_tuple);
-    const bool is_last_message_in_bag = std::get<3>(next_msg_tuple);
-
-    // notice: 从包哪里开始执行？ 可以跳过一定时间，对于IMU消息可用；一般采集前30s用于消息标定
-#ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
-    if (msg.time_stamp <
-        (begin_time.nanoseconds() +
-         rclcpp::Duration(FLAGS_skip_seconds, 0).nanoseconds())) {
-      continue;
-    }
-#else
-    if (msg.recv_timestamp <
-        (begin_time.nanoseconds() +
-         rclcpp::Duration(FLAGS_skip_seconds, 0).nanoseconds())) {
-      continue;
-    }
-#endif
-    // (2) 找到map_builder对应的graph.Trajectory
-    int trajectory_id;
-    if (bag_index_to_trajectory_id.count(bag_index) == 0) {
-      // 懒加载，并且不进行消息监听；只进行建图过程中的消息发布；
-      trajectory_id =
-          node.AddOfflineTrajectory(bag_expected_sensor_ids.at(bag_index),
-                                    bag_trajectory_options.at(bag_index));
-      CHECK(bag_index_to_trajectory_id
-                .emplace(std::piecewise_construct,
-                         std::forward_as_tuple(bag_index),
-                         std::forward_as_tuple(trajectory_id))
-                .second);
-      LOG(INFO) << "Assigned trajectory " << trajectory_id << " to bag "
-                << bag_filenames.at(bag_index);
-    } else {
-      trajectory_id = bag_index_to_trajectory_id.at(bag_index);
-    }
-    // (3) 将bag_scan_topic 映射成carto默认的 bagIdx_sensorId的消息名
-    const auto bag_topic = std::make_pair(
-        bag_index, cartographer_offline_node->get_node_base_interface()
-                       ->resolve_topic_or_service_name(msg.topic_name, false));
-    auto it = bag_topic_to_sensor_id.find(bag_topic);
-    // (4) 消息处理，进行建图
-    if (it != bag_topic_to_sensor_id.end()) {
-      const std::string& sensor_id = it->second.id; //sensorId消息名
-
-      if (topic_type == "sensor_msgs/msg/LaserScan") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        sensor_msgs::msg::LaserScan::SharedPtr laser_scan_msg =
-            std::make_shared<sensor_msgs::msg::LaserScan>();
-        laser_scan_serializer.deserialize_message(&serialized_msg,
-                                                  laser_scan_msg.get());
-        node.HandleLaserScanMessage(trajectory_id, sensor_id, laser_scan_msg);
-        // TODO: landmark检测器，进和检测；
-        // landmark检测器，进行landmark的参数的获取
-      } else if (topic_type == "sensor_msgs/msg/MultiEchoLaserScan") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        sensor_msgs::msg::MultiEchoLaserScan::SharedPtr
-            multi_echo_laser_scan_msg =
-                std::make_shared<sensor_msgs::msg::MultiEchoLaserScan>();
-        multi_echo_laser_scan_serializer.deserialize_message(
-            &serialized_msg, multi_echo_laser_scan_msg.get());
-        node.HandleMultiEchoLaserScanMessage(trajectory_id, sensor_id,
-                                             multi_echo_laser_scan_msg);
-      } else if (topic_type == "sensor_msgs/msg/PointCloud2") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        sensor_msgs::msg::PointCloud2::SharedPtr pcl2_scan_msg =
-            std::make_shared<sensor_msgs::msg::PointCloud2>();
-        pcl2_serializer.deserialize_message(&serialized_msg,
-                                            pcl2_scan_msg.get());
-        node.HandlePointCloud2Message(trajectory_id, sensor_id, pcl2_scan_msg);
-      } else if (topic_type == "sensor_msgs/msg/Imu") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        sensor_msgs::msg::Imu::SharedPtr imu_scan_msg =
-            std::make_shared<sensor_msgs::msg::Imu>();
-        imu_serializer.deserialize_message(&serialized_msg, imu_scan_msg.get());
-        node.HandleImuMessage(trajectory_id, sensor_id, imu_scan_msg);
-      } else if (topic_type == "nav_msgs/msg/Odometry") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        nav_msgs::msg::Odometry::SharedPtr odom_scan_msg =
-            std::make_shared<nav_msgs::msg::Odometry>();
-        odom_serializer.deserialize_message(&serialized_msg,
-                                            odom_scan_msg.get());
-        node.HandleOdometryMessage(trajectory_id, sensor_id, odom_scan_msg);
-      } else if (topic_type == "sensor_msgs/msg/NavSatFix") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        sensor_msgs::msg::NavSatFix::SharedPtr nav_sat_fix_msg =
-            std::make_shared<sensor_msgs::msg::NavSatFix>();
-        nav_sat_fix_serializer.deserialize_message(&serialized_msg,
-                                                   nav_sat_fix_msg.get());
-        node.HandleNavSatFixMessage(trajectory_id, sensor_id, nav_sat_fix_msg);
-      } else if (topic_type == "cartographer_ros_msgs/msg/LandmarkList") {
-        rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
-        cartographer_ros_msgs::msg::LandmarkList::SharedPtr landmark_list_msg =
-            std::make_shared<cartographer_ros_msgs::msg::LandmarkList>();
-        landmark_list_serializer.deserialize_message(&serialized_msg,
-                                                     landmark_list_msg.get());
-        node.HandleLandmarkMessage(trajectory_id, sensor_id, landmark_list_msg);
-      }
-    }
-    // (5) 进行时钟维护，使用ros2bag中记录时刻的时钟进行发布
-#ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
-    clock.clock = rclcpp::Time(msg.time_stamp);
-#else
-    clock.clock = rclcpp::Time(msg.recv_timestamp);
-#endif
-    clock_publisher->publish(clock);
-    // (6) 进行在离线建图过程中可视化消息发布和接收消息处理
-    rclcpp::spin_some(cartographer_offline_node);
-    // (7) 如果是包内最后一个消息，那么就将这个轨迹任务结束，按理说offline模式所有的submap都会成Finish状态
-    if (is_last_message_in_bag) {
-      node.FinishTrajectory(trajectory_id);
-    }
-  }
-
-  // Ensure the clock is republished after the bag has been finished, during the
-  // final optimization, serialization, and optional indefinite spinning at the
-  // end.
-  // TODO: need a spin for the timer to tick
-  auto clock_republish_timer = cartographer_offline_node->create_wall_timer(
-      std::chrono::milliseconds(int(kClockPublishFrequencySec)),
-      [&clock_publisher, &clock]() { clock_publisher->publish(clock); });
-  node.RunFinalOptimization();
-
-  const std::chrono::time_point<std::chrono::steady_clock> end_time =
-      std::chrono::steady_clock::now();
-  const double wall_clock_seconds =
-      std::chrono::duration_cast<std::chrono::duration<double>>(end_time -
-                                                                start_time)
-          .count();
-
-  LOG(INFO) << "Elapsed wall clock time: " << wall_clock_seconds << " s";
-#ifdef __linux__
-  timespec cpu_timespec = {};
-  clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu_timespec);
-  LOG(INFO) << "Elapsed CPU time: "
-            << (cpu_timespec.tv_sec + 1e-9 * cpu_timespec.tv_nsec) << " s";
-  rusage usage;
-  CHECK_EQ(getrusage(RUSAGE_SELF, &usage), 0) << strerror(errno);
-  LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
-#endif
-
-  // Serialize unless we have neither a bagfile nor an explicit state filename.
-  if (rclcpp::ok() &&
-      !(bag_filenames.empty() && FLAGS_save_state_filename.empty())) {
-    const std::string state_output_filename =
-        FLAGS_save_state_filename.empty() ? bag_filenames.front() + ".pbstream"
-                                          : FLAGS_save_state_filename;
-    LOG(INFO) << "Writing state to '" << state_output_filename << "'...";
-    node.SerializeState(state_output_filename,
-                        true /* include_unfinished_submaps */);
-  }
-  if (FLAGS_keep_running) {
-    LOG(INFO) << "维持运行等待shutdown. 此时时间/clock应该不会发生变化";
-    rclcpp::spin(cartographer_offline_node);
-  }
-  // 到此时/clock时间停止，可以进行整个轨迹的回溯，交互进程也可展开
-}
-}  // namespace cartographer_ros
-
-// 关闭终端行缓冲和回显，实现无回车读单个字符
-char get_char_without_enter() {
-  struct termios old_attr, new_attr;
-  tcgetattr(STDIN_FILENO, &old_attr);  // 获取原有终端属性
-  new_attr = old_attr;
-  new_attr.c_lflag &= ~(ICANON | ECHO);  // 关闭行缓冲(ICANON)、关闭回显(ECHO)
-  tcsetattr(STDIN_FILENO, TCSANOW, &new_attr);  // 立即应用新属性
-
-  char c = getchar();  // 此时无需回车，输入单个字符立即返回
-
-  tcsetattr(STDIN_FILENO, TCSANOW, &old_attr);  // 恢复原有终端属性（必做！）
-  return c;
-}
-
+using namespace cartographer::mapping;
 
 /**
- * @brief Frame data structure for storing scan and odometry information
+ * @brief 记录激光雷达历史队列
  */
 struct FrameData {
   sensor_msgs::msg::LaserScan::SharedPtr scan;
@@ -581,66 +140,32 @@ struct FrameData {
   FrameData() : frame_index(0) {}
 };
 
-/**
- * @brief Global pose tracking using odometry
- */
-class PoseTracker {
- public:
-  PoseTracker() : initialized_(false) {}
+// 关闭终端行缓冲和回显，实现无回车读单个字符
+char get_char_without_enter() {
+  struct termios old_attr, new_attr;
+  tcgetattr(STDIN_FILENO, &old_attr);  // 获取原有终端属性
+  new_attr = old_attr;
+  new_attr.c_lflag &= ~(ICANON | ECHO);  // 关闭行缓冲(ICANON)、关闭回显(ECHO)
+  tcsetattr(STDIN_FILENO, TCSANOW, &new_attr);  // 立即应用新属性
 
-  /**
-   * @brief Update global pose using odometry
-   */
-  void update(
-      std::shared_ptr<FrameData>& laser_frame,
-      const std::unordered_map<int64_t, nav_msgs::msg::Odometry::SharedPtr>&
-          odom_queue,
-      const transforms::Rigid3d& laser_to_base) {
-    // TODO: 使用OdometryQueue进行LaserScan数据的CSplines拟合
-    // 1. 获取laser帧前后两个里程数据
-    std::vector<PosePoint> odom_poses(laser_frame->between_next_odoms.size());
-    for (const auto odom_stamp : laser_frame->between_next_odoms) {
-      PosePoint tmp_pose;
-      tmp_pose.pose =
-          transforms::ToRigid3d(odom_queue.at(odom_stamp)->pose.pose);
-      tmp_pose.timestamp = odom_stamp * 1e-9;
-      odom_poses.emplace_back(tmp_pose);
-    }
-    // 3. 对于laser帧前后两个里程数据进行插值
-    PoseCubicSpline odom_spline(odom_poses);
-    // 4. 计算当前扫描点的里程计位姿
-    auto global_base_pose =
-        odom_spline.interpolate(laser_frame->timestamp * 1e-9);
-    // 激光雷达在里程计下的全局坐标位姿
-    global_pose_ = global_base_pose.pose * laser_to_base;
-    trajectory_.push_back(global_pose_);
-    // 2.
-    // 使用CSpline进行插值求取laser帧各个扫描点的全局位姿；构建filtered点云
-    if (!initialized_) {
-      // Initialize with first odometry
-      initialized_ = true;
-      return;
-    }
-  }
+  char c = getchar();  // 此时无需回车，输入单个字符立即返回
 
-  /**
-   * @brief Get current global pose
-   */
-  transforms::Rigid3d getGlobalPose() const { return global_pose_; }
+  tcsetattr(STDIN_FILENO, TCSANOW, &old_attr);  // 恢复原有终端属性（必做！）
+  return c;
+}
 
-  const std::vector<transforms::Rigid3d>& getTrajectory() const {
-    return trajectory_;
-  }
-  /**
-   * @brief Reset tracker
-   */
-  void reset() { initialized_ = false; }
+namespace cartographer_ros {
+constexpr char kClockTopic[] = "clock";
+constexpr char kTfStaticTopic[] = "/tf_static";
+constexpr char kTfTopic[] = "/tf";
+constexpr double kClockPublishFrequencySec = 1. / 30.;
+constexpr int kSingleThreaded = 1;
+// We publish tf messages one second earlier than other messages. Under
+// the assumption of higher frequency tf this should ensure that tf can
+// always interpolate.
+const rclcpp::Duration kDelay(1.0, 0);
 
- private:
-  bool initialized_;
-  transforms::Rigid3d global_pose_;
-  std::vector<transforms::Rigid3d> trajectory_;
-};
+// 创建
 
 /**
  * @brief Interactive bag processing node
@@ -686,6 +211,20 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
    * @brief Run the bag processing
    */
   void run() {
+    // 运行离线建图
+    const cartographer_ros::MapBuilderFactory map_builder_factory =
+        [](const ::cartographer::mapping::proto::MapBuilderOptions&
+               map_builder_options) {
+          return ::cartographer::mapping::CreateMapBuilder(map_builder_options);
+        };
+    this->RunOfflineNode(map_builder_factory, shared_from_this());
+        // Pre-load all frames
+        if (!loadAllFrames()) {
+      RCLCPP_ERROR(this->get_logger(), "回溯激光里程失败");
+      return;
+    }
+    RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
+
     // 创建反光柱可视化器
     visualization_helper_ =
         std::make_shared<VisualizationHelper>(shared_from_this());
@@ -693,33 +232,6 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     publish_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(100),
         std::bind(&ReflectorNoiseBagNode::publishTimerCallback, this));
-
-    if (bag_path_.empty()) {
-      RCLCPP_ERROR(this->get_logger(),
-                   "Bag路径未设置，请使用--ros-args -p bag_path:=<path>");
-      return;
-    }
-
-    // Open bag file
-    rosbag2_cpp::Reader reader;
-    rosbag2_storage::StorageOptions storage_options;
-    storage_options.uri = bag_path_;
-    storage_options.storage_id = "sqlite3";
-    rosbag2_cpp::ConverterOptions converter_options;
-    reader.open(storage_options, converter_options);
-    RCLCPP_INFO(this->get_logger(), "打开Bag文件: %s", bag_path_.c_str());
-    for (auto& topic : reader.get_all_topics_and_types()) {
-      RCLCPP_INFO(this->get_logger(), "Topic: %s, Type: %s", topic.name.c_str(),
-                  topic.type.c_str());
-    }
-
-    // Pre-load all frames
-    if (!loadAllFrames(reader)) {
-      RCLCPP_ERROR(this->get_logger(), "加载帧失败");
-      return;
-    }
-
-    RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
 
     // Start keyboard input thread
     std::thread input_thread(&ReflectorNoiseBagNode::keyboardInputThread, this);
@@ -737,6 +249,447 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     RCLCPP_INFO(this->get_logger(), "处理完成");
   }
 
+  // 处理
+  // 激光雷达离线处理
+  void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
+                      rclcpp::Node::SharedPtr cartographer_offline_node) {
+    CHECK(!FLAGS_configuration_directory.empty())
+        << "-configuration_directory is missing.";
+    LOG(WARNING) << "FLAGS_configuration_directory "
+                 << FLAGS_configuration_directory;
+    CHECK(!FLAGS_configuration_basenames.empty())
+        << "-configuration_basenames is missing.";
+    LOG(WARNING) << "FLAGS_configuration_basenames "
+                 << FLAGS_configuration_basenames;
+    CHECK(!(FLAGS_bag_filenames.empty() && FLAGS_load_state_filename.empty()))
+        << "-bag_filenames and -load_state_filename cannot both be "
+           "unspecified.";
+    std::regex regex(",");
+    std::vector<std::string> bag_filenames;
+    if (!FLAGS_bag_filenames.empty()) {
+      std::regex regex(",");
+      std::vector<std::string> if_bag_filenames(
+          std::sregex_token_iterator(FLAGS_bag_filenames.begin(),
+                                     FLAGS_bag_filenames.end(), regex, -1),
+          std::sregex_token_iterator());
+      bag_filenames = if_bag_filenames;
+    }
+    cartographer_ros::NodeOptions node_options;
+    std::vector<std::string> configuration_basenames(
+        std::sregex_token_iterator(FLAGS_configuration_basenames.begin(),
+                                   FLAGS_configuration_basenames.end(), regex,
+                                   -1),
+        std::sregex_token_iterator());
+    // 1.1 单个包加载，一个配置文件
+    std::vector<TrajectoryOptions> bag_trajectory_options(1);
+    std::tie(node_options, bag_trajectory_options.at(0)) = LoadOptions(
+        FLAGS_configuration_directory, configuration_basenames.at(0));
+    // 1.2
+    // 多个包加载不同的配置文件，获者将一个配置文件复制多份；当作不同轨迹的配置。
+    for (size_t bag_index = 1; bag_index < bag_filenames.size(); ++bag_index) {
+      TrajectoryOptions current_trajectory_options;
+      if (bag_index < configuration_basenames.size()) {
+        std::tie(std::ignore, current_trajectory_options) =
+            LoadOptions(FLAGS_configuration_directory,
+                        configuration_basenames.at(bag_index));
+      } else {
+        current_trajectory_options = bag_trajectory_options.at(0);
+      }
+      bag_trajectory_options.push_back(current_trajectory_options);
+    }
+    if (bag_filenames.size() > 0) {
+      CHECK_EQ(bag_trajectory_options.size(), bag_filenames.size());
+    }
+    // 1. ---------------- 完成 map_builder 相关配置 ---------------------------
+    // 这里对所有包/urdf 一次性提取
+    // /tf_static所以认为其循环时间为0；在进行bag播放前己经完成了buffer
+    // 包内的/tf，动态/tf动态变换的/tf只关于/odom->/base_link; 也可以提前加载；
+    // 但实际上它在连续 过程中，它的查询时段只受 tf_buffer的缓存时间的影响。
+    node_options.lookup_transform_timeout_sec = 0.;
+    auto map_builder = map_builder_factory(node_options.map_builder_options);
+
+    // 2. ---------------- 时序说明 ----------------------------------
+    // 2.1 使用系统时间进行建图任务开启，以监听处理耗时
+    const std::chrono::time_point<std::chrono::steady_clock> start_time =
+        std::chrono::steady_clock::now();
+    // 2.2 建图过程中tf_buffer询，使用get_clock()
+    // sim_time时使用bag中的记录时间--clock
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer =
+        std::make_shared<tf2_ros::Buffer>(
+            cartographer_offline_node->get_clock(), tf2::durationFromSec(10),
+            cartographer_offline_node);
+
+    // 从urdf文件中读取 对应的static_transforms变化
+    std::vector<geometry_msgs::msg::TransformStamped> urdf_transforms;
+    if (!FLAGS_urdf_filenames.empty()) {
+      std::vector<std::string> urdf_filenames(
+          std::sregex_token_iterator(FLAGS_urdf_filenames.begin(),
+                                     FLAGS_urdf_filenames.end(), regex, -1),
+          std::sregex_token_iterator());
+      for (const auto& urdf_filename : urdf_filenames) {
+        const auto current_urdf_transforms =
+            ReadStaticTransformsFromUrdf(urdf_filename, tf_buffer);
+        urdf_transforms.insert(urdf_transforms.end(),
+                               current_urdf_transforms.begin(),
+                               current_urdf_transforms.end());
+      }
+    }
+    // 开启 dedicated thread 用于 tf
+    // 变换，指为TF变换处理单独分配一个后台线程，与主线程分离运行
+    tf_buffer->setUsingDedicatedThread(true);
+
+    // 创建cartographer节点
+    cartographer_ros::Node node(node_options, std::move(map_builder), tf_buffer,
+              cartographer_offline_node, FLAGS_collect_metrics);
+    if (!FLAGS_load_state_filename.empty()) {
+      node.LoadState(FLAGS_load_state_filename, FLAGS_load_frozen_state);
+    }
+    // 发布动态 \tf; 因为可能存在odom->base_link的变换;
+    rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher =
+        cartographer_offline_node->create_publisher<tf2_msgs::msg::TFMessage>(
+            kTfTopic, kLatestOnlyPublisherQueueSize);
+    // 创建消息 \tf_static 发布
+    ::tf2_ros::StaticTransformBroadcaster static_tf_broadcaster(
+        cartographer_offline_node);
+    // 2.3 创建时钟发布器，持续给use_sim_time情况下发布时终；
+    rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_publisher =
+        cartographer_offline_node->create_publisher<rosgraph_msgs::msg::Clock>(
+            kClockTopic, kLatestOnlyPublisherQueueSize);
+    rosgraph_msgs::msg::Clock clock;  // 发布时钟的消息
+
+    // 发布静态tf，从urdf文件中读取
+    if (urdf_transforms.size() > 0) {
+      static_tf_broadcaster.sendTransform(urdf_transforms);
+    }
+
+    // --------------------- 3. 传感器消息绑定 ---------------------
+    // 3.1 不周包使用不同消息名绑定。对于多bag包，那么消息会出现 bag_i_SenorId
+    // 这样的前缀 那么bag中对应的消息名，也应重新remapping
+    std::vector<
+        std::set<cartographer::mapping::TrajectoryBuilderInterface::SensorId>>
+        bag_expected_sensor_ids;
+    if (configuration_basenames.size() == 1) {
+      const auto current_bag_expected_sensor_ids =
+          node.ComputeDefaultSensorIdsForMultipleBags(
+              {bag_trajectory_options.front()});
+      bag_expected_sensor_ids = {bag_filenames.size(),
+                                 current_bag_expected_sensor_ids.front()};
+    } else {
+      bag_expected_sensor_ids =
+          node.ComputeDefaultSensorIdsForMultipleBags(bag_trajectory_options);
+    }
+    CHECK_EQ(bag_expected_sensor_ids.size(), bag_filenames.size());
+    // 3.2 将rosbag包加载到PlayableBagMultiplexer播放器，进行多包多机管理和播放
+    std::map<std::pair<int /* bag_index */, std::string>,
+             cartographer::mapping::TrajectoryBuilderInterface::SensorId>
+        bag_topic_to_sensor_id;
+    PlayableBagMultiplexer playable_bag_multiplexer(cartographer_offline_node);
+    // 3.3 sensorId绑定，将以包的顺序进行消息名替换；
+    // [{bagIdx}，bag_sensor_topic] = bag_{bagIdx+1}_{sensorId}
+    // notice: bag_sensor_topic="/bag_{bagIdx+1}_{sensorId}"
+    // 对于多个激光传感器的包其命名对sensorId进行累加，如 xx_scan_1, xx_scan_2
+    for (size_t current_bag_index = 0; current_bag_index < bag_filenames.size();
+         ++current_bag_index) {
+      const std::string& bag_filename = bag_filenames.at(current_bag_index);
+      if (!rclcpp::ok()) {
+        return;
+      }
+      for (const auto& expected_sensor_id :
+           bag_expected_sensor_ids.at(current_bag_index)) {
+        LOG(INFO) << "expected_sensor_id.id " << expected_sensor_id.id;
+        const auto bag_resolved_topic = std::make_pair(
+            static_cast<int>(current_bag_index), "/" + expected_sensor_id.id);
+        if (bag_topic_to_sensor_id.count(bag_resolved_topic) != 0) {
+          LOG(ERROR) << "Sensor /" << expected_sensor_id.id << " of bag "
+                     << current_bag_index << " resolves to topic "
+                     << bag_resolved_topic.second
+                     << " which is already used by "
+                     << " sensor "
+                     << bag_topic_to_sensor_id.at(bag_resolved_topic).id;
+        }
+        bag_topic_to_sensor_id[bag_resolved_topic] = expected_sensor_id;
+      }
+      // 提前加载kDelay秒数据到PlayableBag::messagebuffer中和TF消息到tf_buffer中；
+      auto serializer = rclcpp::Serialization<tf2_msgs::msg::TFMessage>();
+      playable_bag_multiplexer.AddPlayableBag(PlayableBag(
+          bag_filename, current_bag_index, kDelay,
+          // PlayableBag::FilteringEarlyMessageHandler
+          // 提前加载kDelay秒数据，并过TFt
+          [&tf_publisher, tf_buffer, cartographer_offline_node, serializer](
+              std::shared_ptr<rosbag2_storage::SerializedBagMessage> msg) {
+            if (msg->topic_name == kTfTopic ||
+                msg->topic_name == kTfStaticTopic) {
+              if (FLAGS_use_bag_transforms) {
+                tf2_msgs::msg::TFMessage tf_message;
+                rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
+                try {
+                  serializer.deserialize_message(&serialized_msg, &tf_message);
+                  for (auto& transform : tf_message.transforms) {
+                    try {
+                      // 当tf_buffer很大时O(1)+O(NlogN)的查询时间其实是很慢的，所以这里让tf_buffer
+                      // 时间尽量小；
+                      // 而且对于静态发布，由其是多个包的情况下，应该提前加载；这样所有的
+                      // 静态tf都在缓存中，而carto通过tf_bridge查找的就是静态变换所以这里是提前加载
+                      // 包扩\tf也一样，可以通过提前加载，来保持插值稳定性；
+                      // 但一般用不到。
+                      tf_buffer->setTransform(
+                          transform, "unused_authority",
+                          msg->topic_name == kTfStaticTopic);
+                    } catch (const tf2::TransformException& ex) {
+                      LOG(WARNING) << ex.what();
+                    }
+                  }
+                  tf_publisher->publish(tf_message);
+                } catch (const rclcpp::exceptions::RCLError& rcl_error) {
+                  return true;
+                }
+              }
+              // Tell 'PlayableBag' to filter the tf message since there is no
+              // further use for it.
+              return false;
+            } else {
+              return true;
+            }
+          }));
+    }
+
+    // 3.3 绑定消息，由于传感器消息使用的是cartographer_ros中默认的消息名，所以
+    // 在使用此进程时需要进行topic名映射； 如 laserscan-->"/bag_{bagIdx+1}_scan"
+    // bag_topic_to_sensor_id[({bagIdx}，bag_sensor_topic)] =
+    // bag_{bagIdx+1}_{sensorId}
+    // notice:
+    // 此处需要保证不同包中，消息名是不同的；这样在使用 --ros-args -remapping -r
+    // 时不会因为topic重名而出现错误映射。
+    std::set<std::string> bag_topics;
+    std::stringstream bag_topics_string;
+    for (const auto& topic : playable_bag_multiplexer.topics()) {
+      std::string resolved_topic =
+          cartographer_offline_node->get_node_base_interface()
+              ->resolve_topic_or_service_name(topic, false);
+      bag_topics.insert(resolved_topic);
+      bag_topics_string << resolved_topic << ",";
+    }
+    // 检查是否cartographer配置的传感器，成功与rosbag中的消息名进行绑定；是否存在未绑定的传感器
+    // 这里给了消息映射范式:
+    // 前面为carto程序处理的消息，后面为rosbag包中的消息；不同包消息不同名。
+    // 单包:  scan --> bag_scan_topic odom--> bag_odom_topic
+    // 多包: (1) bag_1_scan_0 --> bag1_frontscan_topic bag_1_scan1 ->
+    // bag1_backscan_topic (2) bag2_scan -> bag2_scan_topic bag2_odom ->
+    // bag2_odom_topic
+    bool print_topics = false;
+    for (const auto& entry : bag_topic_to_sensor_id) {
+      const std::string& resolved_topic = entry.first.second;
+      if (bag_topics.count(resolved_topic) == 0) {
+        LOG(WARNING) << "Expected resolved topic \"" << resolved_topic
+                     << "\" not found in bag file(s).";
+        print_topics = true;
+      }
+    }
+    if (print_topics) {
+      LOG(WARNING) << "Available topics in bag file(s) are "
+                   << bag_topics_string.str();
+    }
+    // 4. ---------------------- 处理消息生成轨迹 -------------------------
+    // 4.1
+    // 不同的包对应不同的轨迹，包的处理存在先后顺序，执行完一个包再进行执行下一个包
+    // 包的顺序决定map的坐标；而在PlayableBagMultiPlayer中执行顺序是倒序的，
+    // 最后一个包先进行消息提取。
+    std::unordered_map<int, int> bag_index_to_trajectory_id;
+    const rclcpp::Time begin_time =
+        // If no bags were loaded, we cannot peek the time of first message.
+        playable_bag_multiplexer.IsMessageAvailable()
+            ? playable_bag_multiplexer.PeekMessageTime()
+            : rclcpp::Time();
+
+    auto laser_scan_serializer =
+        rclcpp::Serialization<sensor_msgs::msg::LaserScan>();
+    auto multi_echo_laser_scan_serializer =
+        rclcpp::Serialization<sensor_msgs::msg::MultiEchoLaserScan>();
+    auto pcl2_serializer =
+        rclcpp::Serialization<sensor_msgs::msg::PointCloud2>();
+    auto imu_serializer = rclcpp::Serialization<sensor_msgs::msg::Imu>();
+    auto odom_serializer = rclcpp::Serialization<nav_msgs::msg::Odometry>();
+    auto nav_sat_fix_serializer =
+        rclcpp::Serialization<sensor_msgs::msg::NavSatFix>();
+    auto landmark_list_serializer =
+        rclcpp::Serialization<cartographer_ros_msgs::msg::LandmarkList>();
+    // 4.2 执行多包消息处理
+    while (playable_bag_multiplexer.IsMessageAvailable()) {
+      if (!::rclcpp::ok()) {
+        return;
+      }
+      // (1) 按顺序提取包内的消息；时间以bag录制时间为准
+      const auto next_msg_tuple = playable_bag_multiplexer.GetNextMessage();
+      const rosbag2_storage::SerializedBagMessage& msg =
+          std::get<0>(next_msg_tuple);
+      const int bag_index = std::get<1>(next_msg_tuple);
+      const std::string topic_type = std::get<2>(next_msg_tuple);
+      const bool is_last_message_in_bag = std::get<3>(next_msg_tuple);
+
+      // notice: 从包哪里开始执行？
+      // 可以跳过一定时间，对于IMU消息可用；一般采集前30s用于消息标定
+#ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
+      if (msg.time_stamp <
+          (begin_time.nanoseconds() +
+           rclcpp::Duration(FLAGS_skip_seconds, 0).nanoseconds())) {
+        continue;
+      }
+#else
+      if (msg.recv_timestamp <
+          (begin_time.nanoseconds() +
+           rclcpp::Duration(FLAGS_skip_seconds, 0).nanoseconds())) {
+        continue;
+      }
+#endif
+      // (2) 找到map_builder对应的graph.Trajectory
+      int trajectory_id;
+      if (bag_index_to_trajectory_id.count(bag_index) == 0) {
+        // 懒加载，并且不进行消息监听；只进行建图过程中的消息发布；
+        trajectory_id =
+            node.AddOfflineTrajectory(bag_expected_sensor_ids.at(bag_index),
+                                      bag_trajectory_options.at(bag_index));
+        CHECK(bag_index_to_trajectory_id
+                  .emplace(std::piecewise_construct,
+                           std::forward_as_tuple(bag_index),
+                           std::forward_as_tuple(trajectory_id))
+                  .second);
+        LOG(INFO) << "Assigned trajectory " << trajectory_id << " to bag "
+                  << bag_filenames.at(bag_index);
+      } else {
+        trajectory_id = bag_index_to_trajectory_id.at(bag_index);
+      }
+      // (3) 将bag_scan_topic 映射成carto默认的 bagIdx_sensorId的消息名
+      const auto bag_topic = std::make_pair(
+          bag_index,
+          cartographer_offline_node->get_node_base_interface()
+              ->resolve_topic_or_service_name(msg.topic_name, false));
+      auto it = bag_topic_to_sensor_id.find(bag_topic);
+      // (4) 消息处理，进行建图
+      if (it != bag_topic_to_sensor_id.end()) {
+        const std::string& sensor_id = it->second.id;  // sensorId消息名
+
+        if (topic_type == "sensor_msgs/msg/LaserScan") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          sensor_msgs::msg::LaserScan::SharedPtr laser_scan_msg =
+              std::make_shared<sensor_msgs::msg::LaserScan>();
+          laser_scan_serializer.deserialize_message(&serialized_msg,
+                                                    laser_scan_msg.get());
+          node.HandleLaserScanMessage(trajectory_id, sensor_id, laser_scan_msg);
+          // TODO: landmark检测器，进和检测；
+          // landmark检测器，进行landmark的参数的获取
+          int64_t laserTimeStamp = rclcpp::Time(laser_scan_msg->header.stamp).nanoseconds();
+          this->setLaserScan(laserTimeStamp, laser_scan_msg);
+        } else if (topic_type == "sensor_msgs/msg/MultiEchoLaserScan") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          sensor_msgs::msg::MultiEchoLaserScan::SharedPtr
+              multi_echo_laser_scan_msg =
+                  std::make_shared<sensor_msgs::msg::MultiEchoLaserScan>();
+          multi_echo_laser_scan_serializer.deserialize_message(
+              &serialized_msg, multi_echo_laser_scan_msg.get());
+          node.HandleMultiEchoLaserScanMessage(trajectory_id, sensor_id,
+                                               multi_echo_laser_scan_msg);
+        } else if (topic_type == "sensor_msgs/msg/PointCloud2") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          sensor_msgs::msg::PointCloud2::SharedPtr pcl2_scan_msg =
+              std::make_shared<sensor_msgs::msg::PointCloud2>();
+          pcl2_serializer.deserialize_message(&serialized_msg,
+                                              pcl2_scan_msg.get());
+          node.HandlePointCloud2Message(trajectory_id, sensor_id,
+                                        pcl2_scan_msg);
+        } else if (topic_type == "sensor_msgs/msg/Imu") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          sensor_msgs::msg::Imu::SharedPtr imu_scan_msg =
+              std::make_shared<sensor_msgs::msg::Imu>();
+          imu_serializer.deserialize_message(&serialized_msg,
+                                             imu_scan_msg.get());
+          node.HandleImuMessage(trajectory_id, sensor_id, imu_scan_msg);
+        } else if (topic_type == "nav_msgs/msg/Odometry") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          nav_msgs::msg::Odometry::SharedPtr odom_scan_msg =
+              std::make_shared<nav_msgs::msg::Odometry>();
+          odom_serializer.deserialize_message(&serialized_msg,
+                                              odom_scan_msg.get());
+          node.HandleOdometryMessage(trajectory_id, sensor_id, odom_scan_msg);
+        } else if (topic_type == "sensor_msgs/msg/NavSatFix") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          sensor_msgs::msg::NavSatFix::SharedPtr nav_sat_fix_msg =
+              std::make_shared<sensor_msgs::msg::NavSatFix>();
+          nav_sat_fix_serializer.deserialize_message(&serialized_msg,
+                                                     nav_sat_fix_msg.get());
+          node.HandleNavSatFixMessage(trajectory_id, sensor_id,
+                                      nav_sat_fix_msg);
+        } else if (topic_type == "cartographer_ros_msgs/msg/LandmarkList") {
+          rclcpp::SerializedMessage serialized_msg(*msg.serialized_data);
+          cartographer_ros_msgs::msg::LandmarkList::SharedPtr
+              landmark_list_msg =
+                  std::make_shared<cartographer_ros_msgs::msg::LandmarkList>();
+          landmark_list_serializer.deserialize_message(&serialized_msg,
+                                                       landmark_list_msg.get());
+          node.HandleLandmarkMessage(trajectory_id, sensor_id,
+                                     landmark_list_msg);
+        }
+      }
+      // (5) 进行时钟维护，使用ros2bag中记录时刻的时钟进行发布
+#ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
+      clock.clock = rclcpp::Time(msg.time_stamp);
+#else
+      clock.clock = rclcpp::Time(msg.recv_timestamp);
+#endif
+      clock_publisher->publish(clock);
+      // (6) 进行在离线建图过程中可视化消息发布和接收消息处理
+      rclcpp::spin_some(cartographer_offline_node);
+      // (7)
+      // 如果是包内最后一个消息，那么就将这个轨迹任务结束，按理说offline模式所有的submap都会成Finish状态
+      if (is_last_message_in_bag) {
+        node.FinishTrajectory(trajectory_id);
+      }
+    }
+
+    // Ensure the clock is republished after the bag has been finished, during
+    // the final optimization, serialization, and optional indefinite spinning
+    // at the end.
+    // TODO: need a spin for the timer to tick
+    auto clock_republish_timer = cartographer_offline_node->create_wall_timer(
+        std::chrono::milliseconds(int(kClockPublishFrequencySec)),
+        [&clock_publisher, &clock]() { clock_publisher->publish(clock); });
+    node.RunFinalOptimization();
+
+    const std::chrono::time_point<std::chrono::steady_clock> end_time =
+        std::chrono::steady_clock::now();
+    const double wall_clock_seconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>(end_time -
+                                                                  start_time)
+            .count();
+
+    LOG(INFO) << "Elapsed wall clock time: " << wall_clock_seconds << " s";
+#ifdef __linux__
+    timespec cpu_timespec = {};
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu_timespec);
+    LOG(INFO) << "Elapsed CPU time: "
+              << (cpu_timespec.tv_sec + 1e-9 * cpu_timespec.tv_nsec) << " s";
+    rusage usage;
+    CHECK_EQ(getrusage(RUSAGE_SELF, &usage), 0) << strerror(errno);
+    LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
+#endif
+
+    // Serialize unless we have neither a bagfile nor an explicit state
+    // filename.
+    if (rclcpp::ok() &&
+        !(bag_filenames.empty() && FLAGS_save_state_filename.empty())) {
+      // const std::string state_output_filename =
+      //     FLAGS_save_state_filename.empty()
+      //         ? bag_filenames.front() + ".pbstream"
+      //         : FLAGS_save_state_filename;
+      LOG(INFO) << "完成Cartographer离线建图..... 准备进反光柱检测回溯......";
+      // node.SerializeState(state_output_filename,
+      //                     true /* include_unfinished_submaps */);
+    }
+    // 到此时/clock时间停止，可以进行整个轨迹的回溯，交互进程也可展开
+    auto pose_graph = map_builder->pose_graph();
+    auto trajectoryNodePoses = pose_graph->GetTrajectoryNodePoses();
+    this->setTrajectoryNodePoseQueue(trajectoryNodePoses);
+  }
+
  private:
   // 配置算法相关参数，从ros2的参数服务器中提取，只提取一次
   void configureDetectionModules() {
@@ -748,122 +701,44 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     configureGlobalTracker();
   }
 
-  /**
-   * @brief Load all frames from bag
-   * WARN: 由于里程计前后时间跳变, 这里选用录包时刻的系统时间戳为Laser时间
-   */
-  bool loadAllFrames(rosbag2_cpp::Reader& reader) {
-    int64_t peek_time = 0;  // Peek time for next message
+  void setLaserScan(int64_t timestamp,
+                    sensor_msgs::msg::LaserScan::SharedPtr scan_msg) {
+    if (scan_map_.find(timestamp) == scan_map_.end()) {
+      scan_map_[timestamp] = scan_msg;
+      scan_timestamps_.push_back(timestamp);
+    } else {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "scan消息: 存在重复时间戳");
+    }
+  }
 
-    auto laser_scan_serializer =
-        rclcpp::Serialization<sensor_msgs::msg::LaserScan>();
-    // auto imu_serializer = rclcpp::Serialization<sensor_msgs::msg::Imu>();
-    auto odom_serializer = rclcpp::Serialization<nav_msgs::msg::Odometry>();
-    auto tf_serializer = rclcpp::Serialization<tf2_msgs::msg::TFMessage>();
-    int64_t last_odom_stamp = 0;
-    int64_t last_scan_stamp = 0;
-
-    // Read all messages
-    RCLCPP_INFO(this->get_logger(), "开始读取rosbag包: %s ..... ",
-                bag_path_.c_str());
-    while (reader.has_next()) {
-      rosbag2_storage::SerializedBagMessageSharedPtr msg = reader.read_next();
-
-      // Deserialize message
-      rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
-      if (msg->time_stamp > peek_time) {
-        peek_time = msg->time_stamp;
+  void setTrajectoryNodePoseQueue(
+      const cartographer::mapping::MapById<NodeId, TrajectoryNodePose>& trajectory_poses) {
+    // 这里假设只有一个包，进行回溯里程回溯
+    int trajectory_id = 0;
+    CHECK_GT(trajectory_poses.SizeOfTrajectoryOrZero(trajectory_id), 0);
+    auto node_it = trajectory_poses.BeginOfTrajectory(trajectory_id);
+    for (; node_it != trajectory_poses.EndOfTrajectory(trajectory_id);
+         ++node_it) {
+      auto global_pose = node_it->data.global_pose;
+      if (node_it->data.constant_pose_data.has_value()) {
+        auto carto_time = node_it->data.constant_pose_data.time;
+        // 转化为ros时间戳，然后进行
+        int64_t timestamp = ToRos(carto_time).nanoseconds();
+        odom_timestamps_.push_back(timestamp);
+        odom_queue_.push(TimeRigid3d(global_pose, timestamp));
       } else {
-        RCLCPP_ERROR(this->get_logger(),
-                     "录制的rosbag包出现前后事件跳变: 消息 %s, %ld",
-                     msg->topic_name.c_str(), msg->time_stamp);
-      }
-      // Process based on topic
-      if (msg->topic_name == scan_topic_) {
-        auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-        rclcpp::Serialization<sensor_msgs::msg::LaserScan> serialization;
-        laser_scan_serializer.deserialize_message(&serialized_msg, scan.get());
-        scan->header.stamp = rclcpp::Time(msg->time_stamp);
-        if (scan_map_.find(rclcpp::Time(msg->time_stamp).nanoseconds()) ==
-            scan_map_.end()) {
-          scan_map_[rclcpp::Time(msg->time_stamp).nanoseconds()] = scan;
-          scan_timestamps_.push_back(
-              rclcpp::Time(msg->time_stamp).nanoseconds());
-          assert(last_scan_stamp < rclcpp::Time(msg->time_stamp).nanoseconds());
-          last_scan_stamp = rclcpp::Time(msg->time_stamp).nanoseconds();
-        } else {
-          RCLCPP_ERROR_STREAM(this->get_logger(),
-                              "读取scan消息: "
-                                  << " bag timestamp: " << msg->time_stamp
-                                  << "存在重复时间戳");
-        }
-      } else if (msg->topic_name == odom_topic_) {
-        auto odom = std::make_shared<nav_msgs::msg::Odometry>();
-        odom_serializer.deserialize_message(&serialized_msg, odom.get());
-        odom->header.stamp = rclcpp::Time(msg->time_stamp);
-        if (odom_map_.find(rclcpp::Time(odom->header.stamp).nanoseconds()) ==
-            odom_map_.end()) {
-          odom_map_[rclcpp::Time(odom->header.stamp).nanoseconds()] = odom;
-          odom_timestamps_.push_back(
-              rclcpp::Time(odom->header.stamp).nanoseconds());
-          assert(last_odom_stamp <
-                 rclcpp::Time(odom->header.stamp).nanoseconds());
-          last_odom_stamp = rclcpp::Time(odom->header.stamp).nanoseconds();
-          odom_queue_.push(TimeRigid3d(transforms::ToRigid3d(odom->pose.pose),
-                                       last_odom_stamp));
-        } else {
-          RCLCPP_ERROR_STREAM(this->get_logger(),
-                              "读取odom消息: "
-                                  << " bag timestamp: " << msg->time_stamp
-                                  << "存在重复时间戳");
-        }
-      } else if (msg->topic_name == "/tf_static") {
-        // Read tf_static for laser_scan to base_link transform
-        auto tf_msg = std::make_shared<tf2_msgs::msg::TFMessage>();
-        try {
-          tf_serializer.deserialize_message(&serialized_msg, tf_msg.get());
-          for (auto& transform : tf_msg->transforms) {
-            if (transform.header.frame_id == "base_link" &&
-                transform.child_frame_id == "laser") {
-              laser_to_base_ = transform;
-              RCLCPP_INFO(this->get_logger(),
-                          "找到laser到base_link的变换: (%.3f, %.3f)",
-                          transform.transform.translation.x,
-                          transform.transform.translation.y);
-            }
-          }
-        } catch (const rclcpp::exceptions::RCLError& rcl_error) {
-          RCLCPP_ERROR_STREAM(this->get_logger(),
-                              "解析TF_STATIC发生错误" << rcl_error.what());
-        }
+        LOG(WARNING) << "TrajectoryPose没有时间戳!!! 跳过加载NodePose！！！";
       }
     }
-    RCLCPP_INFO_STREAM(this->get_logger(),
-                       "完成读取rosbag包:  ..... " << bag_path_);
-    // 展示整体队列和信息内容:
-    RCLCPP_INFO_STREAM(this->get_logger(),
-                       "激光雷达队列信息: " << scan_map_.size()
-                                            << "帧, 起始范围: ["
-                                            << scan_timestamps_.front() << " , "
-                                            << scan_timestamps_.back() << "]");
-    RCLCPP_INFO_STREAM(this->get_logger(),
-                       "里程计队列信息: " << odom_map_.size()
-                                          << "帧, 起始范围: ["
-                                          << scan_timestamps_.front() << " , "
-                                          << scan_timestamps_.back() << "]");
-    // 为激光数据进行里程计计算
-    // 1. C-Splines拟合算法
-    // TODO: 此处应该直接使用
-    // scan的时间戳来进行{duration}时间范围内查找，可用里程计；
-    // 这里使用3次样条插值进行拟合
-    // 估计出laserscan当前时刻下以odom为关联轴的位姿拟合结果，并附带关联odom的起始数据，以及C-BSpline的拟合函数；
-    // ---odom3--odom4--odom5--|--laser0-- | --odom6--odom7--odom9-- |
-    // --laser1-- | --odom10--odom11--odom12-- |
-    // --laser2 -- ... laser0: [odom3, odom9]
-    // 进行数据关联，并利用此范围内数据进行拟合;
-    // 当接收到laser1时，所以laser0为数据处理起始位置 laser1： [odom4, odom12]
-    // 进行数据关联，并利用此范围内数据进行拟合;
-    // 当接收到laser2时，永远以2帧为1拍进行数据关联
+  }
+
+  /**
+   * @brief 使用RunOptimization进行代码加载
+   * WARN: 由于里程计前后时间跳变, 这里选用录包时刻的系统时间戳为Laser时间
+   */
+  bool loadAllFrames() {
+    LOG(INFO) << "双拍回溯激光时间序列与里程计时间戳";
+    // TODO: 时间队列处理，利用RunOfflineNode()中multiplery进行数据加载
     size_t frame_idx = 0;
     std::vector<int64_t>::const_iterator odom_peek = odom_timestamps_.cbegin();
     std::sort(scan_timestamps_.begin(), scan_timestamps_.end());
@@ -938,13 +813,6 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
         frames_[frame_idx]->between_odoms.emplace_back(odom);
       }
       // 打印双拍提取信息
-      // RCLCPP_INFO(this->get_logger(),
-      //             "[-]激光雷达第 %d帧, 使用的里程计数据: %ld帧, 双拍提取数据:
-      //             "
-      //             "%ld帧, before_vec: %ld, after_vec: %ld",
-      //             frame_idx, frames_[frame_idx]->between_next_odoms.size(),
-      //             frames_[frame_idx]->between_odoms.size(),
-      //             before_vec.size(), after_vec.size());
       frame_idx++;
     }
     // 补偿最后一帧激光雷达的数据丢弃，队列中始终有一帧数据
@@ -958,6 +826,24 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     if (frame_index >= frames_.size()) {
       RCLCPP_WARN(this->get_logger(), "帧索引超出范围: %zu/%zu", frame_index,
                   frames_.size());
+      return;
+    }
+
+    try {
+      // Get transform from base_link to laser frame
+      if (!has_laser_to_base_) {
+        laser_to_base_ = tf_buffer_->lookupTransform(
+            source_frame, target_frame, rclcpp::Time(scan_timestamp),
+            std::chrono::milliseconds(100));
+        has_laser_to_base_ = true;
+        RCLCPP_WARN(this->get_logger(),
+                    "Finish LaserToBase transform configure!");
+      }
+    } catch (tf2::TransformException& ex) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                           "无法获取从%s到%s的变换: %s", source_frame.c_str(),
+                           target_frame.c_str(), ex.what());
+      has_laser_to_base_ = false;
       return;
     }
 
@@ -1170,24 +1056,22 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   }
 
   /**
-   * @brief Filter points by intensity
+   * @brief 强度过滤
    */
   std::vector<Point> filterByIntensity(const std::vector<Point>& points,
                                        double threshold) {
     std::vector<Point> filtered;
     filtered.reserve(points.size());
-
     for (const auto& point : points) {
       if (point.intensity >= threshold) {
         filtered.push_back(point);
       }
     }
-
     return filtered;
   }
 
   /**
-   * @brief Compute centroid of cluster
+   * @brief 聚类中心的距离
    */
   Point computeCentroid(const std::vector<Point>& cluster) {
     Point centroid;
@@ -1405,7 +1289,6 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   // 激光与里程计相关数据
   std::unordered_map<int64_t, sensor_msgs::msg::LaserScan::SharedPtr>
       scan_map_;  // Map of scan messages by timestamp
-  std::unordered_map<int64_t, nav_msgs::msg::Odometry::SharedPtr> odom_map_;
   std::vector<int64_t> odom_timestamps_;  // Vector of frames
   TimeOrderQueue<transforms::Rigid3d>
       odom_queue_;  // 可用于在线里程计的队列管理
@@ -1415,6 +1298,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   size_t current_frame_index_;
   // 激光雷达相对于基座的位姿变换
   geometry_msgs::msg::TransformStamped laser_to_base_;
+  bool has_laser_to_base_{false};
 
   // 点云矫正器
   bool use_distort_corrector_;
@@ -1422,8 +1306,6 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   // 聚类器
   FixedDBSCAN fixed_dbscan_;
   double min_confidence_;
-  // Pose tracking
-  PoseTracker pose_tracker_;
   // Detection modules
   bool use_short_tracker_;
   RefelctorDetector reflector_detector_;
@@ -1439,6 +1321,8 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   std::atomic<bool> should_exit_;
 };
 
+}  // namespace cartographer_ros
+
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
@@ -1447,22 +1331,8 @@ int main(int argc, char** argv) {
   google::ParseCommandLineFlags(&argc, &argv, false);
 
   cartographer_ros::ScopedRosLogSink ros_log_sink;
-
-  const cartographer_ros::MapBuilderFactory map_builder_factory =
-      [](const ::cartographer::mapping::proto::MapBuilderOptions&
-             map_builder_options) {
-        return ::cartographer::mapping::CreateMapBuilder(map_builder_options);
-      };
-
-  rclcpp::Node::SharedPtr cartographer_offline_node =
-      rclcpp::Node::make_shared("cartographer_offline_node");
-  cartographer_ros::RunOfflineNode(map_builder_factory,
-                                   cartographer_offline_node);
-
-  auto node = std::make_shared<ReflectorNoiseBagNode>();
-
+  auto node = std::make_shared<cartographer_ros::ReflectorNoiseBagNode>();
   RCLCPP_INFO(node->get_logger(), "启动反光柱逐帧检测 (Bag处理版本)");
-
   node->run();
 
   rclcpp::shutdown();
