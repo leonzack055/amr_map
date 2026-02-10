@@ -1,0 +1,11 @@
+# ROS2 parameters for robot_state_publisher
+# Corresponds to byd_amr_lds.launch.py
+
+robot_state_publisher:
+  ros__parameters:
+    # Use simulation time
+    use_sim_time: true
+    
+    # Robot description (URDF)
+    # This is typically loaded from the URDF file at runtime
+    # robot_description: <urdf_content>

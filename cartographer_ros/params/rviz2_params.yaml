@@ -1,0 +1,10 @@
+# ROS2 parameters for rviz2
+# Corresponds to byd_amr_lds.launch.py
+
+rviz2:
+  ros__parameters:
+    # Use simulation time
+    use_sim_time: true
+    
+    # RViz configuration file path
+    rviz_config: $(find-pkg-share cartographer_ros)/configuration_files/demo_docker2d.rviz

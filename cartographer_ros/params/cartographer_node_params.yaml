@@ -1,0 +1,22 @@
+# ROS2 parameters for cartographer_node
+# Corresponds to byd_amr_lds.launch.py
+
+cartographer_node:
+  ros__parameters:
+    # Use simulation time
+    use_sim_time: true
+    
+    # Configuration files
+    configuration_directory: $(find-pkg-share cartographer_ros)/configuration_files
+    configuration_basename: online_byd_landmark.lua
+    
+    # State file settings
+    save_state_filename: $(find-pkg-prefix cartographer_ros)/map.pbstream
+    load_state_filename: ""
+    load_frozen_state: false
+    
+    # Logging
+    log_level: info
+    
+    # Topic remappings (can also be done via remap tags in launch file)
+    odom: /odom_combined
