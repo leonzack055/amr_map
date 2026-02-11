@@ -870,49 +870,63 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     } else {
       frame->compensated_points = compensated_points;
     }
-    // TODO:
-    // 进行利用global_poses和odom计算当前laser时刻map->odom的映射，从而计算global_pose;
+    // 进行利用global_poses和odom计算当前laser时刻map->odom的映射，从而计算global_pose
     auto globalposes = globalpose_queue_.popBefore(frame->timestamp);
-    if (globalposes.empty()) {
-      auto globalpose = globalpose_queue_.front();
-      auto odompose =
-          frame->between_odoms[frame->between_odoms.size()/2];
-      auto global_laser_pose =
-          globalpose.data * transforms::ToRigid3d(laser_to_base_);
-      map_odom_ = global_laser_pose * odompose.data.inverse();
-      LOG(WARNING) << frame->timestamp
-                   << " 时刻globalpose队列中无数据，里程计与全局位姿之间的关"
-                      "联odom->map"
-                   << map_odom_ << "全局位姿:" << globalpose.data
-                   << " 全局时刻:" << globalpose.timestamp
-                   << " 里程计位姿: " << odompose.data
-                   << " 里程计时刻:" << odompose.timestamp;
-      // 测试, 此处map_odom_不应该每次都去查找，应该找到globalposes队列后，在进行一次map_odom更新
-      // 检查一下为什么通过distortion进行矫正的odom坐标系下的点云反而会出现错误？？？
-      // 目前直接使用trajectory_nodelist时刻时间会出现里程不连续的问题。
-      // 并考虑完成时，进行全局写入？？
-      auto odom_pose = odompose.data;
-      auto map_pose = map_odom_ * odom_pose;
-      LOG(INFO) << "理论是它应该是Idt: " << map_pose;
-      frame->global_pose = global_laser_pose;
+    auto odompose = frame->between_odoms[frame->between_odoms.size() / 2];
+    transforms::Rigid3d global_laser_pose;
+    
+    if (!map_odom_initialized_) {
+      // 第一次计算map_odom_
+      if (globalposes.empty()) {
+        // popBefore为空，说明第一帧时间早于所有globalpose，使用front()初始化
+        if (!globalpose_queue_.empty()) {
+          auto globalpose = globalpose_queue_.front();
+          global_laser_pose = globalpose.data * transforms::ToRigid3d(laser_to_base_);
+          map_odom_ = global_laser_pose * odompose.data.inverse();
+          map_odom_initialized_ = true;
+          LOG(INFO) << "首次初始化map_odom_ (使用front): " << map_odom_
+                    << " 全局时刻:" << globalpose.timestamp
+                    << " 激光时刻:" << frame->timestamp;
+        } else {
+          LOG(ERROR) << "globalpose_queue_为空，无法初始化map_odom_";
+          return;
+        }
+      } else {
+        // popBefore非空，使用back()初始化
+        auto globalpose = globalposes.back();
+        global_laser_pose = globalpose.data * transforms::ToRigid3d(laser_to_base_);
+        map_odom_ = global_laser_pose * odompose.data.inverse();
+        map_odom_initialized_ = true;
+        LOG(INFO) << "首次初始化map_odom_ (使用popBefore.back): " << map_odom_
+                  << " 全局时刻:" << globalpose.timestamp
+                  << " 激光时刻:" << frame->timestamp;
+      }
     } else {
-      auto globalpose = globalposes.back();
-      auto odompose = frame->between_odoms[frame->between_odoms.size() / 2];
-      auto global_laser_pose =
-          globalpose.data * transforms::ToRigid3d(laser_to_base_);
-      map_odom_ = global_laser_pose * odompose.data.inverse();
-      LOG(WARNING) << frame->timestamp
-                   << " 时刻，里程计与全局位姿之间的关联map->odom" << map_odom_
-                   << "全局位姿:" << globalpose.data
-                   << " 全局时刻:" << globalpose.timestamp
-                   << " 里程计位姿: " << odompose.data
-                   << " 里程计时刻:" << odompose.timestamp;
-      // 测试
-      auto odom_pose = odompose.data;
-      auto map_pose = map_odom_ * odom_pose;
-      LOG(INFO) << "理论是它应该是Idt: " << map_pose;
-      frame->global_pose = global_laser_pose;
+      // map_odom_已初始化，检查是否需要更新
+      if (!globalposes.empty()) {
+        // popBefore非空，说明map_odom_在此帧发生了变化，需要更新
+        auto globalpose = globalposes.back();
+        global_laser_pose = globalpose.data * transforms::ToRigid3d(laser_to_base_);
+        map_odom_ = global_laser_pose * odompose.data.inverse();
+        LOG(WARNING) << frame->timestamp
+                     << " 时刻map_odom_已更新: " << map_odom_
+                     << " 全局位姿:" << globalpose.data
+                     << " 全局时刻:" << globalpose.timestamp
+                     << " 里程计位姿: " << odompose.data
+                     << " 里程计时刻:" << odompose.timestamp;
+      } else {
+        // popBefore为空，说明map_odom_之间没有变化，不用更新
+        global_laser_pose = map_odom_ * odompose.data;
+        LOG(INFO) << frame->timestamp
+                  << " 时刻map_odom_未变化，保持不变";
+      }
     }
+    
+    // 验证计算结果
+    auto odom_pose = odompose.data;
+    auto map_pose = map_odom_ * odom_pose;
+    LOG(INFO) << "验证: map_odom_ * odom_pose = " << map_pose;
+    frame->global_pose = map_pose;
     // auto globalLaserPose = map_odom_ * frame->global_pose;
     // frame->global_pose = globalLaserPose;
     LOG(INFO) << frame->timestamp << " 估计laser全局位姿" << frame->global_pose;
@@ -1382,6 +1396,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   std::atomic<bool> auto_mode_;
   std::atomic<bool> should_exit_;
   transforms::Rigid3d map_odom_;
+  bool map_odom_initialized_{false};  // 标记map_odom_是否已初始化
 };
 
 }  // namespace cartographer_ros
