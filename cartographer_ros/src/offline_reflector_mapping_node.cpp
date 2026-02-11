@@ -881,7 +881,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
         // popBefore为空，说明第一帧时间早于所有globalpose，使用front()初始化
         if (!globalpose_queue_.empty()) {
           auto globalpose = globalpose_queue_.front();
-          global_laser_pose = globalpose.data * transforms::ToRigid3d(laser_to_base_);
+          global_laser_pose = globalpose.data;
           map_odom_ = global_laser_pose * odompose.data.inverse();
           map_odom_initialized_ = true;
           LOG(INFO) << "首次初始化map_odom_ (使用front): " << map_odom_
@@ -906,7 +906,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
       if (!globalposes.empty()) {
         // popBefore非空，说明map_odom_在此帧发生了变化，需要更新
         auto globalpose = globalposes.back();
-        global_laser_pose = globalpose.data * transforms::ToRigid3d(laser_to_base_);
+        global_laser_pose = globalpose.data;
         map_odom_ = global_laser_pose * odompose.data.inverse();
         LOG(WARNING) << frame->timestamp
                      << " 时刻map_odom_已更新: " << map_odom_
@@ -923,10 +923,10 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     }
     
     // 验证计算结果
-    auto odom_pose = odompose.data;
+    auto odom_pose = frame->between_odoms.back().data;
     auto map_pose = map_odom_ * odom_pose;
     LOG(INFO) << "验证: map_odom_ * odom_pose = " << map_pose;
-    frame->global_pose = map_pose;
+    frame->global_pose = map_pose * transforms::ToRigid3d(laser_to_base_);
     // auto globalLaserPose = map_odom_ * frame->global_pose;
     // frame->global_pose = globalLaserPose;
     LOG(INFO) << frame->timestamp << " 估计laser全局位姿" << frame->global_pose;
