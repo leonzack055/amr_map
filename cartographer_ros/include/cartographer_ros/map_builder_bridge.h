@@ -82,6 +82,8 @@ class MapBuilderBridge {
   void RunFinalOptimization();
   bool SerializeState(const std::string& filename,
                       const bool include_unfinished_submaps);
+  void SetGlobalLandmarkList(
+      const cartographer_ros_msgs::msg::LandmarkList::ConstPtr landmark_msg);
 
   void HandleSubmapQuery(
       const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr request,

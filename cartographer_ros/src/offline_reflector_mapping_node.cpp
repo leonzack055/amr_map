@@ -21,11 +21,18 @@ Modified: !date!
 #include <condition_variable>
 #include <deque>
 
+#include "cartographer/io/file_writer.h"
+#include "cartographer/io/image.h"
+#include "cartographer/io/proto_stream.h"
+#include "cartographer/io/proto_stream_deserializer.h"
+#include "cartographer/io/submap_painter.h"
+#include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/map_builder.h"
 #include "cartographer_ros/node.h"
 #include "cartographer_ros/offline_node.h"
 #include "cartographer_ros/playable_bag.h"
 #include "cartographer_ros/ros_log_sink.h"
+#include "cartographer_ros/ros_map.h"
 #include "cartographer_ros/urdf_reader.h"
 #include "cartographer_ros_msgs/srv/trajectory_query.hpp"
 #include "gflags/gflags.h"
@@ -44,6 +51,7 @@ Modified: !date!
 #include <tf2/LinearMath/Quaternion.h>
 #include <unistd.h>  // STDIN_FILENO
 
+#include <boost/filesystem.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <iostream>
 #include <mutex>
@@ -170,6 +178,54 @@ const rclcpp::Duration kDelay(1.0, 0);
 transforms::Rigid3d convert_carto_transform(
     const cartographer::transform::Rigid3d& transform) {
   return transforms::Rigid3d(transform.translation(), transform.rotation());
+}
+
+// trackedReflectorToCartographer LandmarkList
+cartographer_ros_msgs::msg::LandmarkList convertTrackedReflectorsToLandmarkList(
+    const std::vector<amr_reflector_noise_handling::TrackedReflector>&
+        tracked_reflectors,
+    const rclcpp::Time& timestamp, const std::string& frame_id = "map") {
+  cartographer_ros_msgs::msg::LandmarkList landmark_list;
+  landmark_list.header.stamp = timestamp;
+  landmark_list.header.frame_id = frame_id;
+
+  for (const auto& tracked : tracked_reflectors) {
+    // Only add confirmed reflectors as landmarks
+    if (tracked.state ==
+        amr_reflector_noise_handling::TrackedReflector::TENTATIVE) {
+      continue;
+    }
+
+    cartographer_ros_msgs::msg::LandmarkEntry entry;
+
+    // Use global_id as landmark ID (must be string)
+    entry.id = std::to_string(tracked.global_id);
+
+    // Set position (tracking_from_landmark_transform)
+    // Note: This is the transform FROM landmark frame TO tracking frame
+    // For a point landmark, we use identity rotation
+    entry.tracking_from_landmark_transform.position.x =
+        tracked.filtered_position.x;
+    entry.tracking_from_landmark_transform.position.y =
+        tracked.filtered_position.y;
+    entry.tracking_from_landmark_transform.position.z = 0.0;  // 2D
+
+    // Identity quaternion for rotation
+    entry.tracking_from_landmark_transform.orientation.w = 1.0;
+    entry.tracking_from_landmark_transform.orientation.x = 0.0;
+    entry.tracking_from_landmark_transform.orientation.y = 0.0;
+    entry.tracking_from_landmark_transform.orientation.z = 0.0;
+
+    // Weights based on position uncertainty
+    // Higher weight = lower uncertainty
+    double weight = 1.0 / (tracked.position_std_dev + 1e-6);
+    entry.translation_weight = std::min(weight, 100.0);  // Clamp
+    entry.rotation_weight = 0.0;  // Point landmarks don't constrain rotation
+
+    landmark_list.landmarks.push_back(entry);
+  }
+
+  return landmark_list;
 }
 
 /**
@@ -649,7 +705,13 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
 
       // Finish trajectory if this is the last message
       if (is_last_message_in_bag) {
-        cartographer_node_->FinishTrajectory(trajectory_id);
+        // cartographer_node_->FinishTrajectory(trajectory_id);
+        // rosbag
+        // 中最后一帧数据，但不杀死轨迹保证subscriber对应的sensor_bridge仍然存在
+        // 利用其特性进行最终landmarks的填加
+        LOG(WARNING) << "cartographer处理最后一帧数据, "
+                        "不杀死轨迹保证subscriber对应的sensor_bridge仍然存在, "
+                        "进行后续landmarks处理";
       }
     }
 
@@ -659,8 +721,12 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
         [this]() { clock_publisher_->publish(clock_msg_); });
 
     // Run final optimization
-    cartographer_node_->RunFinalOptimization();
+    // cartographer_node_->RunFinalOptimization();
 
+    // Extract trajectory node poses for reflector detection
+    auto ros_mapbuilder_bridge = cartographer_node_->map_builder_bridge_;
+    // 进行全局优化
+    ros_mapbuilder_bridge->RunFinalOptimization();
     // Log timing statistics
     const std::chrono::time_point<std::chrono::steady_clock> end_time =
         std::chrono::steady_clock::now();
@@ -685,9 +751,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
         !(bag_filenames.empty() && FLAGS_save_state_filename.empty())) {
       LOG(INFO) << "完成Cartographer离线建图..... 准备进反光柱检测回溯......";
     }
-
-    // Extract trajectory node poses for reflector detection
-    auto ros_mapbuilder_bridge = cartographer_node_->map_builder_bridge_;
+    // 提取优化后轨迹
     cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr
         poses_requeset = std::make_shared<
             cartographer_ros_msgs::srv::TrajectoryQuery::Request>();
@@ -838,7 +902,8 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
               std::chrono::milliseconds(100));
           has_laser_to_base_ = true;
           RCLCPP_WARN_STREAM(this->get_logger(),
-                      "Finish LaserToBase transform configure!" << transforms::ToRigid3d(laser_to_base_));
+                             "Finish LaserToBase transform configure!"
+                                 << transforms::ToRigid3d(laser_to_base_));
         }
       } catch (tf2::TransformException& ex) {
         RCLCPP_FATAL_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
@@ -855,7 +920,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
 
     RCLCPP_INFO(this->get_logger(), "处理帧 %zu/%zu, 时间: %.3f", frame_index,
                 frames_.size() - 1, rclcpp::Time(frame->timestamp).seconds());
-    if(frame->between_odoms.empty()) {
+    if (frame->between_odoms.empty()) {
       return;
     }
     // 1. 使用扭曲补偿, 并获取扫描时刻插值轨迹
@@ -874,7 +939,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     auto globalposes = globalpose_queue_.popBefore(frame->timestamp);
     auto odompose = frame->between_odoms[frame->between_odoms.size() / 2];
     transforms::Rigid3d global_laser_pose;
-    
+
     if (!map_odom_initialized_) {
       // 第一次计算map_odom_
       if (globalposes.empty()) {
@@ -894,7 +959,8 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
       } else {
         // popBefore非空，使用back()初始化
         auto globalpose = globalposes.back();
-        global_laser_pose = globalpose.data * transforms::ToRigid3d(laser_to_base_);
+        global_laser_pose =
+            globalpose.data * transforms::ToRigid3d(laser_to_base_);
         map_odom_ = global_laser_pose * odompose.data.inverse();
         map_odom_initialized_ = true;
         LOG(INFO) << "首次初始化map_odom_ (使用popBefore.back): " << map_odom_
@@ -917,11 +983,10 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
       } else {
         // popBefore为空，说明map_odom_之间没有变化，不用更新
         global_laser_pose = map_odom_ * odompose.data;
-        LOG(INFO) << frame->timestamp
-                  << " 时刻map_odom_未变化，保持不变";
+        LOG(INFO) << frame->timestamp << " 时刻map_odom_未变化，保持不变";
       }
     }
-    
+
     // 验证计算结果
     auto odom_pose = frame->between_odoms.back().data;
     auto map_pose = map_odom_ * odom_pose;
@@ -959,6 +1024,79 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     }
   }
 
+  void writeReflectorsToPbstream() {
+    // In processFrame() after reflector detection:
+    auto tracked_reflectors =
+        reflector_detector_.getCurrentAllTrackedReflectors();
+    auto landmark_list =
+        convertTrackedReflectorsToLandmarkList(tracked_reflectors, this->now(),
+                                               "map"  // 只能是全局坐标系
+        );
+
+    auto landmark_msg =
+        std::make_shared<cartographer_ros_msgs::msg::LandmarkList>(
+            landmark_list);
+    auto ros_mapbuilder_bridge = cartographer_node_->map_builder_bridge_;
+    auto trajectories = ros_mapbuilder_bridge->GetTrajectoryStates();
+    CHECK(trajectories.size() == 1);
+    CHECK(trajectories.begin()->second ==
+          ::cartographer::mapping::PoseGraphInterface::TrajectoryState::ACTIVE);
+    LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
+    ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_msg);
+    LOG(WARNING)
+        << "[✔] 完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
+    // cartographer_node_->FinishTrajectory(trajectories.begin()->first);
+
+    // 保存地图名称
+    std::vector<std::string> bag_filenames;
+    if (!FLAGS_bag_filenames.empty()) {
+      std::regex regex(",");
+      std::vector<std::string> if_bag_filenames(
+          std::sregex_token_iterator(FLAGS_bag_filenames.begin(),
+                                     FLAGS_bag_filenames.end(), regex, -1),
+          std::sregex_token_iterator());
+      bag_filenames = if_bag_filenames;
+    }
+    const std::string state_output_filename =
+        bag_filenames.front() + ".pbstream";
+    LOG(INFO) << "....正在保存pbstream地图文件: '" << state_output_filename
+              << "'...";
+    cartographer_node_->SerializeState(state_output_filename,
+                                       true /* include_unfinished_submaps */);
+    // TODO: 保存SMAP
+    while (!boost::filesystem::exists(state_output_filename)) {
+      rclcpp::sleep_for(std::chrono::milliseconds(500));
+    }
+    LOG(INFO) << "完成保存地图文件: '" << state_output_filename << "'...";
+    // 读取pbsteam转换成smap
+    cartographer::io::ProtoStreamReader reader(state_output_filename);
+    cartographer::io::ProtoStreamDeserializer deserializer(&reader);
+    LOG(INFO) << "加载pbstream地图.......";
+    std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>
+        submap_slices;
+    cartographer::mapping::ValueConversionTables conversion_tables;
+    cartographer::io::DeserializeAndFillSubmapSlices(
+        &deserializer, &submap_slices, &conversion_tables);
+    CHECK(reader.eof());
+    LOG(INFO) << "生成地图切片submap slices.";
+    auto result = ::cartographer::io::PaintSubmapSlices(submap_slices, 0.05);
+    // 生成pgm和yaml,以及smap
+    std::string map_filestem = bag_filenames.front();
+    cartographer::io::StreamFileWriter pgm_writer(map_filestem + ".pgm");
+
+    cartographer::io::Image image(std::move(result.surface));
+
+    const Eigen::Vector2d origin(-result.origin.x() * 0.05,
+                                 (result.origin.y() - image.height()) * 0.05);
+
+    WritePgm(image, 0.05, &pgm_writer, origin, state_output_filename);
+
+    cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
+    WriteYaml(0.05, origin, pgm_writer.GetFilename(), &yaml_writer);
+    LOG(INFO) << "生成SMap地图.....";
+    LOG(INFO) << "完成carographer 离线反光柱建图流程!!.";
+  }
+
   /**
    * @brief 时间回调定时器进行发布可视化消息，调用visualization_helper
    */
@@ -994,6 +1132,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
     RCLCPP_INFO(this->get_logger(), "  'p' - 上一帧");
     RCLCPP_INFO(this->get_logger(), "  ' ' (空格) - 切换自动模式");
     RCLCPP_INFO(this->get_logger(), "  'q' - 退出");
+    RCLCPP_INFO(this->get_logger(), "  's' - 保存全部反光柱到地图");
 
     while (!should_exit_) {
       char key = get_char_without_enter();
@@ -1023,7 +1162,7 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
           RCLCPP_INFO(this->get_logger(), "自动模式: %s",
                       auto_mode_ ? "开启" : "关闭");
           if (auto_mode_) {
-            // startAutoMode();
+            startAutoMode();
           }
           break;
 
@@ -1032,6 +1171,11 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
           RCLCPP_INFO(this->get_logger(), "安全退出程序");
           should_exit_ = true;
           rclcpp::shutdown();
+          break;
+        case 's':
+        case 'S':
+          RCLCPP_WARN(this->get_logger(), "保存全部反光柱到地图");
+          writeReflectorsToPbstream();
           break;
 
         default:
@@ -1046,11 +1190,13 @@ class ReflectorNoiseBagNode : public rclcpp::Node {
   void startAutoMode() {
     std::thread([this]() {
       while (auto_mode_ && !should_exit_) {
-        if (current_frame_index_ < frames_.size() - 1) {
+        if (current_frame_index_ < frames_.size() - 2) {
           processFrame(current_frame_index_ + 1);
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         } else {
           RCLCPP_INFO(this->get_logger(), "自动处理完成");
+          RCLCPP_WARN(this->get_logger(), "保存全部反光柱到地图");
+          writeReflectorsToPbstream();
           auto_mode_ = false;
           break;
         }

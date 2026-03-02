@@ -33,7 +33,8 @@ constexpr double kTrajectoryLineStripMarkerScale = 0.07;
 constexpr double kLandmarkMarkerScale = 0.2;
 constexpr double kConstraintMarkerScale = 0.025;
 
-::std_msgs::msg::ColorRGBA ToMessage(const cartographer::io::FloatColor& color) {
+::std_msgs::msg::ColorRGBA ToMessage(
+    const cartographer::io::FloatColor& color) {
   ::std_msgs::msg::ColorRGBA result;
   result.r = color[0];
   result.g = color[1];
@@ -42,9 +43,9 @@ constexpr double kConstraintMarkerScale = 0.025;
   return result;
 }
 
-visualization_msgs::msg::Marker CreateTrajectoryMarker(const int trajectory_id,
-                                                  const std::string& frame_id,
-                                                  rclcpp::Time node_time) {
+visualization_msgs::msg::Marker CreateTrajectoryMarker(
+    const int trajectory_id, const std::string& frame_id,
+    rclcpp::Time node_time) {
   visualization_msgs::msg::Marker marker;
   marker.ns = "Trajectory " + std::to_string(trajectory_id);
   marker.id = 0;
@@ -70,10 +71,9 @@ int GetLandmarkIndex(
   return it->second;
 }
 
-visualization_msgs::msg::Marker CreateLandmarkMarker(int landmark_index,
-                                                const Rigid3d& landmark_pose,
-                                                const std::string& frame_id,
-                                                rclcpp::Time node_time) {
+visualization_msgs::msg::Marker CreateLandmarkMarker(
+    int landmark_index, const Rigid3d& landmark_pose,
+    const std::string& frame_id, rclcpp::Time node_time) {
   visualization_msgs::msg::Marker marker;
   marker.ns = "Landmarks";
   marker.id = landmark_index;
@@ -88,8 +88,9 @@ visualization_msgs::msg::Marker CreateLandmarkMarker(int landmark_index,
   return marker;
 }
 
-void PushAndResetLineMarker(visualization_msgs::msg::Marker* marker,
-                            std::vector<visualization_msgs::msg::Marker>* markers) {
+void PushAndResetLineMarker(
+    visualization_msgs::msg::Marker* marker,
+    std::vector<visualization_msgs::msg::Marker>* markers) {
   markers->push_back(*marker);
   ++marker->id;
   marker->points.clear();
@@ -146,6 +147,15 @@ int MapBuilderBridge::AddTrajectory(
       trajectory_options_.emplace(trajectory_id, trajectory_options);
   CHECK(emplace_result.second == true);
   return trajectory_id;
+}
+
+void MapBuilderBridge::SetGlobalLandmarkList(
+    const cartographer_ros_msgs::msg::LandmarkList::ConstPtr landmark_msg) {
+  CHECK(landmark_msg->header.frame_id == node_options_.map_frame);
+  for(const auto& landmark : landmark_msg->landmarks) {
+    auto global_pose = ToRigid3d(landmark.tracking_from_landmark_transform);
+    map_builder_->pose_graph()->SetLandmarkPose(landmark.id, global_pose, true);
+  }
 }
 
 void MapBuilderBridge::FinishTrajectory(const int trajectory_id) {
@@ -212,7 +222,8 @@ MapBuilderBridge::GetTrajectoryStates() {
   return trajectory_states;
 }
 
-cartographer_ros_msgs::msg::SubmapList MapBuilderBridge::GetSubmapList(rclcpp::Time node_time) {
+cartographer_ros_msgs::msg::SubmapList MapBuilderBridge::GetSubmapList(
+    rclcpp::Time node_time) {
   cartographer_ros_msgs::msg::SubmapList submap_list;
   submap_list.header.stamp = node_time;
   submap_list.header.frame_id = node_options_.map_frame;
@@ -260,7 +271,8 @@ MapBuilderBridge::GetLocalTrajectoryData() {
 }
 
 void MapBuilderBridge::HandleTrajectoryQuery(
-    const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr request,
+    const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr
+        request,
     cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr response) {
   // This query is safe if the trajectory doesn't exist (returns 0 poses).
   // However, we can filter unwanted states at the higher level in the node.
@@ -278,14 +290,14 @@ void MapBuilderBridge::HandleTrajectoryQuery(
     response->trajectory.push_back(pose_stamped);
   }
   response->status.code = cartographer_ros_msgs::msg::StatusCode::OK;
-  response->status.message =
-      "Retrieved " + std::to_string(response->trajectory.size()) +
-      " trajectory nodes from trajectory " + std::to_string(request->trajectory_id) + ".";
+  response->status.message = "Retrieved " +
+                             std::to_string(response->trajectory.size()) +
+                             " trajectory nodes from trajectory " +
+                             std::to_string(request->trajectory_id) + ".";
 }
 
 visualization_msgs::msg::MarkerArray MapBuilderBridge::GetTrajectoryNodeList(
-    rclcpp::Time node_time)
-{
+    rclcpp::Time node_time) {
   visualization_msgs::msg::MarkerArray trajectory_node_list;
   const auto node_poses = map_builder_->pose_graph()->GetTrajectoryNodePoses();
   // Find the last node indices for each trajectory that have either
@@ -320,8 +332,8 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetTrajectoryNodeList(
   }
 
   for (const int trajectory_id : node_poses.trajectory_ids()) {
-    visualization_msgs::msg::Marker marker =
-        CreateTrajectoryMarker(trajectory_id, node_options_.map_frame, node_time);
+    visualization_msgs::msg::Marker marker = CreateTrajectoryMarker(
+        trajectory_id, node_options_.map_frame, node_time);
     int last_inter_submap_constrained_node = std::max(
         node_poses.trajectory(trajectory_id).begin()->id.node_index,
         trajectory_to_last_inter_submap_constrained_node.at(trajectory_id));
@@ -386,8 +398,7 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetTrajectoryNodeList(
 }
 
 visualization_msgs::msg::MarkerArray MapBuilderBridge::GetLandmarkPosesList(
-    rclcpp::Time node_time)
-{
+    rclcpp::Time node_time) {
   visualization_msgs::msg::MarkerArray landmark_poses_list;
   const std::map<std::string, Rigid3d> landmark_poses =
       map_builder_->pose_graph()->GetLandmarkPoses();
@@ -397,14 +408,15 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetLandmarkPosesList(
     //     id_to_pose.second, node_options_.map_frame, node_time));
 
     // TODO: 修改使用landmark 的string to int 作为索引
-    landmark_poses_list.markers.push_back(CreateLandmarkMarker(
-    std::stoi(id_to_pose.first),
-    id_to_pose.second, node_options_.map_frame, node_time));
+    landmark_poses_list.markers.push_back(
+        CreateLandmarkMarker(std::stoi(id_to_pose.first), id_to_pose.second,
+                             node_options_.map_frame, node_time));
   }
   return landmark_poses_list;
 }
 
-visualization_msgs::msg::MarkerArray MapBuilderBridge::GetConstraintList(rclcpp::Time node_time) {
+visualization_msgs::msg::MarkerArray MapBuilderBridge::GetConstraintList(
+    rclcpp::Time node_time) {
   visualization_msgs::msg::MarkerArray constraint_list;
   int marker_id = 0;
   visualization_msgs::msg::Marker constraint_intra_marker;
@@ -416,7 +428,8 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetConstraintList(rclcpp:
   constraint_intra_marker.scale.x = kConstraintMarkerScale;
   constraint_intra_marker.pose.orientation.w = 1.0;
 
-  visualization_msgs::msg::Marker residual_intra_marker = constraint_intra_marker;
+  visualization_msgs::msg::Marker residual_intra_marker =
+      constraint_intra_marker;
   residual_intra_marker.id = marker_id++;
   residual_intra_marker.ns = "Intra residuals";
   // This and other markers which are less numerous are set to be slightly
