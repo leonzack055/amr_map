@@ -296,6 +296,28 @@ target_link_libraries(cartographer_offline_reflector_mapping_node PRIVATE
   ${Boost_LIBRARIES}
 )
 
+# 自定义lifecycle_node 反光柱建图节点
+add_executable(cartographer_lifecycle_offline_reflector_node src/lifecycle_offline_reflector_main.cpp src/lifecycle_offline_reflector_node.cpp)
+target_include_directories(cartographer_lifecycle_offline_reflector_node PRIVATE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
+  "${Boost_INCLUDE_DIRS}"
+)
+target_compile_definitions(cartographer_lifecycle_offline_reflector_node PRIVATE "-DUSE_URDF_H_FILES")
+target_link_libraries(cartographer_lifecycle_offline_reflector_node PRIVATE
+  ${PROJECT_NAME}
+  ${byd_mapbuilder_msgs_TARGETS}
+  ${lifecycle_msgs_TARGETS}
+  cartographer
+  gflags
+  rclcpp::rclcpp
+  urdf::urdf
+  rclcpp_lifecycle::rclcpp_lifecycle
+  amr_reflector_noise_handling::reflector_noise_lib
+  ${Boost_LIBRARIES}
+)
+
 add_executable(cartographer_assets_writer src/assets_writer_main.cpp)
 target_include_directories(cartographer_assets_writer PRIVATE
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -400,6 +422,7 @@ if($ENV{ROS_DISTRO} MATCHES "humble" OR $ENV{ROS_DISTRO} MATCHES "iron")
   target_compile_definitions(cartographer_offline_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
   target_compile_definitions(cartographer_lifecycle_offline_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
   target_compile_definitions(cartographer_offline_reflector_mapping_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
+  target_compile_definitions(cartographer_lifecycle_offline_reflector_node PRIVATE PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME)
 endif()
 
 install(TARGETS ${PROJECT_NAME}
@@ -415,6 +438,7 @@ install(TARGETS
   cartographer_offline_node
   cartographer_offline_reflector_mapping_node
   cartographer_lifecycle_offline_node
+  cartographer_lifecycle_offline_reflector_node
   cartographer_assets_writer
   cartographer_pbstream_map_publisher
   cartographer_pbstream_to_ros_map
