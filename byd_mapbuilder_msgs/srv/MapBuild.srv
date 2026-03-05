@@ -3,6 +3,8 @@
 byd_mapbuilder_msgs/MapBuildRequest req
 string filename
 string bagfile
+string configfile
+string reflector_param_file
 ---
 byd_mapbuilder_msgs/MapBuildStatus status
 string msg

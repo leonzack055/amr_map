@@ -50,12 +50,13 @@ MAP_BUILDER.use_trajectory_builder_2d = true
 TRAJECTORY_BUILDER.collate_landmarks = false
 TRAJECTORY_BUILDER_2D.num_accumulated_range_data = 1
 TRAJECTORY_BUILDER_2D.use_imu_data = false
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 45
 
 -- more points
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.2
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 400
 -- slightly slower insertion
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 45
+TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.53
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.miss_probability = 0.493
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 1e1

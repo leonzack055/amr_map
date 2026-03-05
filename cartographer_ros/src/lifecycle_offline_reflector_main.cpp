@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<cartographer_ros::LifecycleOfflineReflectorNode> cartographer_offline_node = 
       std::make_shared<cartographer_ros::LifecycleOfflineReflectorNode>(
-          "lifecycle_cartographer_reflector_node", true, exe, map_builder_factory);
+          "lifecycle_cartographer_reflector_node", false, exe, map_builder_factory);
 
   exe->add_node(cartographer_offline_node->get_node_base_interface());
   exe->spin();

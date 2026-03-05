@@ -199,6 +199,7 @@ private:
   processFrame(size_t frame_index, cartographer_ros::Node &node,
                int trajectory_id,
                const std::vector<TrajectoryOptions> &bag_trajectory_options);
+  void writeReflectorsToPbstream(cartographer_ros::Node& node);
 
   /**
    * @brief Convert tracked reflectors to LandmarkList message
@@ -246,7 +247,9 @@ private:
   std::string output_pbstream_path_;
   std::string urdf_path_;
   std::string cartographer_install_dir_;
+  std::string cartographer_output_dir_;
   std::string rosbag_dir_;
+  std::string cartoConfig_dir_;
   std::string cartographer_shared_dir_;
   std::string default_configuration_basename_;
 
@@ -273,6 +276,9 @@ private:
   std::string map_filestem_;
 
   // ==================== Reflector Detection Members ====================
+  std::string reflector_param_file_;
+  std::string reflector_scan_frame_;
+  std::string reflector_base_frame_;
 
   // Parameters
   std::string scan_topic_;
