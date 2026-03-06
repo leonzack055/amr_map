@@ -1095,6 +1095,13 @@ LifecycleOfflineReflectorNode::on_activate(
     if (bag_filenames.size() > 0) {
       CHECK_EQ(bag_trajectory_options.size(), bag_filenames.size());
     }
+    // TODO: 单独解这个
+    resolution_ =
+        bag_trajectory_options.at(0)
+            .trajectory_builder_options.trajectory_builder_2d_options()
+            .submaps_options()
+            .grid_options_2d()
+            .resolution();
 
     // 由于我们预加载了变换缓冲区，因此我们永远不应该等待变换。
     // 当我们完成处理包时，我们将简单地丢弃任何由于缺少变换而无法转换的传感器数据。
@@ -1334,8 +1341,10 @@ LifecycleOfflineReflectorNode::on_activate(
       } else {
         trajectory_id = bag_index_to_trajectory_id.at(bag_index);
       }
+
       // 对于多个bag包，只有作了bag_1_scan_1 ->
-      // scan这样的remapping，才能找到对应的sensor_id 当bag_topic_to_sensor_id
+      // scan这样的remapping，才能找到对应的sensor_id
+      // 当bag_topic_to_sensor_id
       const auto bag_topic = std::make_pair(
           bag_index,
           ros_node_->get_node_base_interface()->resolve_topic_or_service_name(
@@ -1487,11 +1496,11 @@ LifecycleOfflineReflectorNode::on_activate(
       }
 
       if (!loadAllFrames()) {
-        LOG(FATAL)<< "mark==  回溯激光里程失败";
+        LOG(FATAL) << "mark==  回溯激光里程失败";
         exit(-1);
       }
       RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
-      if(frames_.size() < 2) {
+      if (frames_.size() < 2) {
         LOG(FATAL) << "mark==  统计激光里程帧数小于2";
       }
       while (true) {
@@ -1512,8 +1521,8 @@ LifecycleOfflineReflectorNode::on_activate(
           LOG(WARNING)
               << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
           LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 反光柱个数:"
-                       << tracked_reflectors.size() << " 带有ID的反光柱个数:" << 
-                       landmark_list->landmarks.size();
+                       << tracked_reflectors.size() << " 带有ID的反光柱个数:"
+                       << landmark_list->landmarks.size();
           ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
           LOG(WARNING)
               << "[✔] "
@@ -1533,6 +1542,36 @@ LifecycleOfflineReflectorNode::on_activate(
       while (!boost::filesystem::exists(output_pbstream_path_)) {
         rclcpp::sleep_for(std::chrono::milliseconds(500));
       }
+
+      // 读取pbsteam转换成smap
+      cartographer::io::ProtoStreamReader reader(state_output_filename);
+      cartographer::io::ProtoStreamDeserializer deserializer(&reader);
+      LOG(INFO) << "二次加载pbstream地图.......";
+      std::map<::cartographer::mapping::SubmapId,
+               ::cartographer::io::SubmapSlice>
+          submap_slices;
+      cartographer::mapping::ValueConversionTables conversion_tables;
+      cartographer::io::DeserializeAndFillSubmapSlices(
+          &deserializer, &submap_slices, &conversion_tables);
+      CHECK(reader.eof());
+      LOG(INFO) << "生成地图切片submap slices.";
+      auto result =
+          ::cartographer::io::PaintSubmapSlices(submap_slices, resolution_);
+      // 生成pgm和yaml,以及smap
+      std::string map_filestem = cartographer_output_dir_ + "/" + map_filestem_;
+      cartographer::io::StreamFileWriter pgm_writer(map_filestem + ".pgm");
+
+      cartographer::io::Image image(std::move(result.surface));
+
+      const Eigen::Vector2d origin(
+          -result.origin.x() * resolution_,
+          (result.origin.y() - image.height()) * resolution_);
+
+      WritePgm(image, resolution_, &pgm_writer, origin, state_output_filename);
+
+      cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
+      WriteYaml(resolution_, origin, map_filestem_ + ".pgm", &yaml_writer);
+
       LOG(INFO) << "完成保存地图文件: '" << state_output_filename << "'...";
       LOG(INFO) << "完成carographer offline建图流程!!.";
     }

@@ -110,7 +110,7 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
 
   // 直线特征提取
   std::vector<cartographer_ros::LineFeature> line_features;
-  if (true)
+  if (false)
   {  // 默认启用直线特征提取
     // 创建直线特征提取器配置
     cartographer_ros::LineExtractionConfig config;
