@@ -169,7 +169,7 @@ void LifecycleOfflineReflectorNode::bagProcessDataCallback(
     const cartographer_ros_msgs::msg::BagfileProgress::SharedPtr msg) {
   float total_seconds = msg->total_seconds;
   float processed_seconds = msg->processed_seconds;
-  float processed_percentage = processed_seconds / total_seconds;
+  float processed_percentage = processed_seconds / total_seconds * 0.3f;
   auto bag_msg = std::make_unique<byd_mapbuilder_msgs::msg::MapBuildProcess>();
   bag_msg->progress = processed_percentage;
 
@@ -890,6 +890,27 @@ void LifecycleOfflineReflectorNode::processFrame(
 
   RCLCPP_INFO(this->get_logger(), "处理帧 %zu/%zu, 时间: %.3f", frame_index,
               frames_.size() - 1, rclcpp::Time(frame->timestamp).seconds());
+  // 发布进度消息
+  float processed_percentage = float(frame_index) / (frames_.size() - 1) * 0.4f + 0.3f;
+  auto bag_msg = std::make_unique<byd_mapbuilder_msgs::msg::MapBuildProcess>();
+  bag_msg->progress = processed_percentage;
+
+  auto now = std::chrono::system_clock::now();
+  auto now_epoch = now.time_since_epoch();
+  auto sec =
+      std::chrono::duration_cast<std::chrono::seconds>(now_epoch).count();
+  auto nsec =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now_epoch).count() %
+      1000000000;
+
+  builtin_interfaces::msg::Time ros_time;
+  ros_time.sec = static_cast<int32_t>(sec);
+  ros_time.nanosec = static_cast<uint32_t>(nsec);
+  std_msgs::msg::Header header;
+  header.stamp = ros_time;
+  header.frame_id = "base_link";
+  bag_msg->header = header;
+  process_pub_->publish(std::move(bag_msg));
 
   if (frame->between_odoms.empty()) {
     return;
@@ -1471,66 +1492,67 @@ LifecycleOfflineReflectorNode::on_activate(
 #endif
     // Serialize unless we have neither a bagfile nor an explicit state
     // filename.
-    if (rclcpp::ok() &&
-        !(bag_filenames.empty() && output_pbstream_path_.empty()) &&
-        enable_mapping_) {
-      LOG(INFO) << "完成Cartographer离线建图..... 准备进反光柱检测回溯......";
-      // 提取优化后轨迹
-      auto ros_mapbuilder_bridge = node.map_builder_bridge_;
-      cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr
-          poses_requeset = std::make_shared<
-              cartographer_ros_msgs::srv::TrajectoryQuery::Request>();
-      poses_requeset->trajectory_id = 0;
-      cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr
-          poses_res_ptr = std::make_shared<
-              cartographer_ros_msgs::srv::TrajectoryQuery::Response>();
-      ros_mapbuilder_bridge->HandleTrajectoryQuery(poses_requeset,
-                                                   poses_res_ptr);
+    LOG(INFO) << "完成Cartographer离线建图..... 准备进反光柱检测回溯......";
+    // 提取优化后轨迹
+    auto ros_mapbuilder_bridge = node.map_builder_bridge_;
+    cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr
+        poses_requeset = std::make_shared<
+            cartographer_ros_msgs::srv::TrajectoryQuery::Request>();
+    poses_requeset->trajectory_id = 0;
+    cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr
+        poses_res_ptr = std::make_shared<
+            cartographer_ros_msgs::srv::TrajectoryQuery::Response>();
+    ros_mapbuilder_bridge->HandleTrajectoryQuery(poses_requeset, poses_res_ptr);
 
-      int odom_indx = 0;
-      for (const auto& geo_msg : poses_res_ptr->trajectory) {
-        int64_t timestamp = rclcpp::Time(geo_msg.header.stamp).nanoseconds();
-        // Add odometry to the time-ordered queue
-        globalpose_queue_.push(
-            TimeRigid3d(transforms::ToRigid3d(geo_msg.pose), timestamp));
-      }
+    int odom_indx = 0;
+    for (const auto& geo_msg : poses_res_ptr->trajectory) {
+      int64_t timestamp = rclcpp::Time(geo_msg.header.stamp).nanoseconds();
+      // Add odometry to the time-ordered queue
+      globalpose_queue_.push(
+          TimeRigid3d(transforms::ToRigid3d(geo_msg.pose), timestamp));
+    }
 
+    if (enable_mapping_) {
       if (!loadAllFrames()) {
         LOG(FATAL) << "mark==  回溯激光里程失败";
         exit(-1);
       }
-      RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
-      if (frames_.size() < 2) {
-        LOG(FATAL) << "mark==  统计激光里程帧数小于2";
+    }
+    RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
+    if (frames_.size() < 2) {
+      LOG(FATAL) << "mark==  统计激光里程帧数小于2";
+    }
+    while (true && enable_mapping_) {
+      if (current_frame_index_ < frames_.size() - 2) {
+        processFrame(current_frame_index_, node, 0, bag_trajectory_options);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        current_frame_index_++;
+      } else {
+        RCLCPP_INFO(this->get_logger(), "自动处理完成");
+        auto tracked_reflectors =
+            reflector_detector_.getCurrentAllTrackedReflectors();
+        auto landmark_list = convertTrackedReflectorsToLandmarkList(
+            tracked_reflectors, ros_node_->now().nanoseconds(),
+            "map"  // 只能是全局坐标系
+        );
+        auto trajectories = ros_mapbuilder_bridge->GetTrajectoryStates();
+        CHECK(trajectories.size() == 1);
+        LOG(WARNING)
+            << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
+        LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 反光柱个数:"
+                     << tracked_reflectors.size() << " 带有ID的反光柱个数:"
+                     << landmark_list->landmarks.size();
+        ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
+        LOG(WARNING)
+            << "[✔] "
+               "完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
+        break;
       }
-      while (true) {
-        if (current_frame_index_ < frames_.size() - 2) {
-          processFrame(current_frame_index_, node, 0, bag_trajectory_options);
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-          current_frame_index_++;
-        } else {
-          RCLCPP_INFO(this->get_logger(), "自动处理完成");
-          auto tracked_reflectors =
-              reflector_detector_.getCurrentAllTrackedReflectors();
-          auto landmark_list = convertTrackedReflectorsToLandmarkList(
-              tracked_reflectors, ros_node_->now().nanoseconds(),
-              "map"  // 只能是全局坐标系
-          );
-          auto trajectories = ros_mapbuilder_bridge->GetTrajectoryStates();
-          CHECK(trajectories.size() == 1);
-          LOG(WARNING)
-              << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
-          LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 反光柱个数:"
-                       << tracked_reflectors.size() << " 带有ID的反光柱个数:"
-                       << landmark_list->landmarks.size();
-          ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
-          LOG(WARNING)
-              << "[✔] "
-                 "完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
-          break;
-        }
-      }
-
+    }
+    // 取消时不存储地图
+    if (rclcpp::ok() &&
+        !(bag_filenames.empty() && output_pbstream_path_.empty()) &&
+        enable_mapping_) {
       const std::string state_output_filename =
           output_pbstream_path_.empty() ? bag_filenames.front() + ".pbstream"
                                         : output_pbstream_path_;
@@ -1542,6 +1564,29 @@ LifecycleOfflineReflectorNode::on_activate(
       while (!boost::filesystem::exists(output_pbstream_path_)) {
         rclcpp::sleep_for(std::chrono::milliseconds(500));
       }
+
+      float processed_percentage = 0.85f;
+      auto bag_msg =
+          std::make_unique<byd_mapbuilder_msgs::msg::MapBuildProcess>();
+      bag_msg->progress = processed_percentage;
+
+      auto now = std::chrono::system_clock::now();
+      auto now_epoch = now.time_since_epoch();
+      auto sec =
+          std::chrono::duration_cast<std::chrono::seconds>(now_epoch).count();
+      auto nsec =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(now_epoch)
+              .count() %
+          1000000000;
+
+      builtin_interfaces::msg::Time ros_time;
+      ros_time.sec = static_cast<int32_t>(sec);
+      ros_time.nanosec = static_cast<uint32_t>(nsec);
+      std_msgs::msg::Header header;
+      header.stamp = ros_time;
+      header.frame_id = "base_link";
+      bag_msg->header = header;
+      process_pub_->publish(std::move(bag_msg));
 
       // 读取pbsteam转换成smap
       cartographer::io::ProtoStreamReader reader(state_output_filename);
@@ -1574,6 +1619,26 @@ LifecycleOfflineReflectorNode::on_activate(
 
       LOG(INFO) << "完成保存地图文件: '" << state_output_filename << "'...";
       LOG(INFO) << "完成carographer offline建图流程!!.";
+
+      // 完成地图保存后发布 100%
+      // 发布进度消息
+      processed_percentage = 1.0f;
+      auto bag_msg_finish =
+          std::make_unique<byd_mapbuilder_msgs::msg::MapBuildProcess>();
+      bag_msg_finish->progress = processed_percentage;
+
+      now = std::chrono::system_clock::now();
+      now_epoch = now.time_since_epoch();
+      sec = std::chrono::duration_cast<std::chrono::seconds>(now_epoch).count();
+      nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(now_epoch)
+                 .count() %
+             1000000000;
+      ros_time.sec = static_cast<int32_t>(sec);
+      ros_time.nanosec = static_cast<uint32_t>(nsec);
+      header.stamp = ros_time;
+      header.frame_id = "base_link";
+      bag_msg_finish->header = header;
+      process_pub_->publish(std::move(bag_msg_finish));
     }
 
     // 3. 节点与执行器解绑
