@@ -1525,7 +1525,7 @@ LifecycleOfflineReflectorNode::on_activate(
     while (true && enable_mapping_) {
       if (current_frame_index_ < frames_.size() - 2) {
         processFrame(current_frame_index_, node, 0, bag_trajectory_options);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // std::this_thread::sleep_for(std::chrono::milliseconds(10));
         current_frame_index_++;
       } else {
         RCLCPP_INFO(this->get_logger(), "自动处理完成");
