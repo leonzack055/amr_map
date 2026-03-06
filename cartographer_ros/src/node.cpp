@@ -214,7 +214,9 @@ Node::Node(
 
 }
 
-Node::~Node() {FinishAllTrajectories();}
+Node::~Node() {FinishAllTrajectories();
+LOG(WARNING) << "cartographer_ros::Node完成析构";
+}
 
 bool Node::handleSubmapQuery(
   const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr request,

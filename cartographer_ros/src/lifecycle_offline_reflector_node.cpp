@@ -396,8 +396,8 @@ LifecycleOfflineReflectorNode::on_configure(
       "cartographer_offline_reflector_node", ros_node_option);
   RCLCPP_INFO(get_logger(), "cartographer_ros反光柱建图节点创建完成!");
   // 反光柱tf信息
-  reflector_scan_frame_ = "";
-  reflector_base_frame_ = "";
+  reflector_scan_frame_ = "laser";
+  reflector_base_frame_ = "base_link";
   // Configure detection modules
   configureDetectionModules();
 
@@ -731,7 +731,7 @@ LifecycleOfflineReflectorNode::convertTrackedReflectorsToLandmarkList(
 
   for (const auto& tracked : tracked_reflectors) {
     // Only add confirmed reflectors as landmarks
-    if (tracked.state != TrackedReflector::CONFIRMED) {
+    if (tracked.state == TrackedReflector::TENTATIVE) {
       continue;
     }
 
@@ -995,8 +995,6 @@ void LifecycleOfflineReflectorNode::writeReflectorsToPbstream(
   ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
   LOG(WARNING)
       << "[✔] 完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
-  node.FinishTrajectory(trajectories.begin()->first);
-  // node.RunFinalOptimization();
   // 保存地图名称
   std::vector<std::string> bag_filenames;
   const std::string state_output_filename = output_pbstream_path_.empty()
@@ -1052,33 +1050,38 @@ LifecycleOfflineReflectorNode::on_activate(
   thread_ = std::make_unique<std::thread>([&]() {
     carto_executor_->add_node(ros_node_);
     cartographer_ros::NodeOptions node_options;
-
+    // 从服务中获取rosbag包的路径和pbstream的输出路径,如果不存在无法建图！
     std::vector<std::string> bag_filenames;
     if (bag_file_path_.empty() || !boost::filesystem::exists(bag_file_path_) ||
         output_pbstream_path_.empty() ||
         default_configuration_basename_.empty()) {
       map_build_status_ = MapBuildStatus::STATUS_ERROR;
-      LOG(ERROR) << "bag_file_path_ or output_pbstream_path_ or "
-                    "carto_configure_file is empty";
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-          CallbackReturn::SUCCESS;
+      return;
     }
-
     LOG(WARNING) << "bag_file_path_ : " << bag_file_path_;
     LOG(WARNING) << "output_pbstream_path_ : " << output_pbstream_path_;
     LOG(WARNING) << "建图默认配置文件 : " << default_configuration_basename_;
     bag_filenames.push_back(bag_file_path_);
-
-    // TODO: 进行配置文件路径的修改，并进行配置文件的修改; 使用固定文件路径
+    // TODO： 如果存储多个rosbag则可能存在指定的多个配置文件，
+    // 这里暂时只考虑一个configure文件 std::regex regex(",");
+    // std::vector<std::string> configuration_basenames(
+    //   std::sregex_token_iterator(
+    //     FLAGS_configuration_basenames.begin(),
+    //     FLAGS_configuration_basenames.end(), regex, -1),
+    //   std::sregex_token_iterator()
+    // );
     std::vector<std::string> configuration_basenames;
     configuration_basenames.push_back(default_configuration_basename_);
-
+    // 不同轨迹rosbag包可能存在不同的传感器配置和
     std::vector<TrajectoryOptions> bag_trajectory_options(1);
+    // 从第一configure文件中加载与ros
+    // node相关的配置，以及map_builder配置主要是PoseGraphOptions的配置
+    // 所有轨迹的PoseGraphOptions配置必须相同，
     std::string configuration_directory =
         cartographer_shared_dir_ + "/configuration_files";
     std::tie(node_options, bag_trajectory_options.at(0)) =
         LoadOptions(configuration_directory, configuration_basenames.at(0));
-
+    // 提取不同轨迹的TrajectoryBuilder配置，构建local_trajectory使用的传感器,TrackingFrame都可以不同
     for (size_t bag_index = 1; bag_index < bag_filenames.size(); ++bag_index) {
       TrajectoryOptions current_trajectory_options;
       if (bag_index < configuration_basenames.size()) {
@@ -1089,33 +1092,20 @@ LifecycleOfflineReflectorNode::on_activate(
       }
       bag_trajectory_options.push_back(current_trajectory_options);
     }
-
     if (bag_filenames.size() > 0) {
       CHECK_EQ(bag_trajectory_options.size(), bag_filenames.size());
     }
 
+    // 由于我们预加载了变换缓冲区，因此我们永远不应该等待变换。
+    // 当我们完成处理包时，我们将简单地丢弃任何由于缺少变换而无法转换的传感器数据。
     node_options.lookup_transform_timeout_sec = 0.;
-    if (node_options.map_builder_options.use_trajectory_builder_2d() &&
-        bag_trajectory_options[0]
-            .trajectory_builder_options.has_trajectory_builder_2d_options()) {
-      auto submap2d_options =
-          bag_trajectory_options[0]
-              .trajectory_builder_options.trajectory_builder_2d_options()
-              .submaps_options();
-      resolution_ = submap2d_options.grid_options_2d().resolution();
-    } else {
-      map_build_status_ = MapBuildStatus::STATUS_ERROR;
-      LOG(ERROR) << "[✘] 传入的配置文件" << default_configuration_basename_
-                 << "不支持2D建图 不进行建图任务...";
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-          CallbackReturn::SUCCESS;
-    }
 
+    // 进行cartographer节点构建并进行逻辑处理, 创建cartographer的核心map_builder
     auto map_builder = map_builder_factory_(node_options.map_builder_options);
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(
         ros_node_->get_clock(), tf2::durationFromSec(10), ros_node_);
-
+    // 从urdf文件中读取 对应的static_transforms变化
     std::regex regex(",");
     std::vector<geometry_msgs::msg::TransformStamped> urdf_transforms;
     if (!FLAGS_use_bag_transforms && !urdf_path_.empty()) {
@@ -1131,40 +1121,46 @@ LifecycleOfflineReflectorNode::on_activate(
       }
     } else if (!FLAGS_use_bag_transforms) {
       map_build_status_ = MapBuildStatus::STATUS_ERROR;
-      LOG(ERROR) << "没有指定urdf文件，无法发布静态tf消息";
-      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-          CallbackReturn::SUCCESS;
+      LOG(WARNING) << "没有指定urdf文件，无法发布静态tf消息";
+      return;
     }
-
+    // 发布静态tf消息，从urdf文件中读取， 开始建图流程了
+    // 开启 dedicated thread 用于 tf
+    // 变换，指为TF变换处理单独分配一个后台线程，与主线程分离运行
     map_build_status_ = MapBuildStatus::STATUS_BUILDING;
     tf_buffer_->setUsingDedicatedThread(true);
-
+    // -----------------------------------------------------------------------
     const std::chrono::time_point<std::chrono::steady_clock> start_time =
         std::chrono::steady_clock::now();
-
-    // Cartographer Node节点进行建图
+    // 创建cartographer节点，进行建图工作
     Node node(node_options, std::move(map_builder), tf_buffer_, ros_node_,
               false);
-
+    // 发布tf消息，包括静态tf和动态tf，并保持tf的队列为1,始终使用最新的tf消息
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher =
         ros_node_->create_publisher<tf2_msgs::msg::TFMessage>(
             kTfTopic, kLatestOnlyPublisherQueueSize);
     ::tf2_ros::StaticTransformBroadcaster static_tf_broadcaster(ros_node_);
-
+    // 发布始终，所以use_sim_time为true，使用默认创建节点的时钟，而不是系统时钟，当然这两个时钟相同。
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_publisher =
         ros_node_->create_publisher<rosgraph_msgs::msg::Clock>(
             kClockTopic, kLatestOnlyPublisherQueueSize);
-
+    // 发布静态tf，从urdf文件中读取
     if (urdf_transforms.size() > 0) {
       static_tf_broadcaster.sendTransform(urdf_transforms);
     }
 
     rosgraph_msgs::msg::Clock clock;
 
+    // 从不同的local_trajectory_opitons中提取cartograher中创建的sensor_id
+    // 只有当bag数量>1时，bag_expected_sensor_ids才会出现以`bag_Num`为前缀创建sensor_id
+    // 如果只有一个bag包，那么还是会以 {laserscan, odom, imu}
+    // 的名称创建sensor_id 例如: [{bag_1_laserscan1, bag_1_odom1};
+    // {bag_2_laserscan2, bag_2_odom2}];
+    // 当只有一个configuration配置文件，也就时一个辆小车时，以上不会出现，它会以默认的前缀组织sensor_id
+    // [{laserscan1, odom, imu}, {laserscan1, odom, imu} ...] 这样的方式出现；
     std::vector<
         std::set<cartographer::mapping::TrajectoryBuilderInterface::SensorId>>
         bag_expected_sensor_ids;
-
     if (configuration_basenames.size() == 1) {
       const auto current_bag_expected_sensor_ids =
           node.ComputeDefaultSensorIdsForMultipleBags(
@@ -1177,21 +1173,20 @@ LifecycleOfflineReflectorNode::on_activate(
     }
     CHECK_EQ(bag_expected_sensor_ids.size(), bag_filenames.size());
 
-    std::map<std::pair<int, std::string>,
+    std::map<std::pair<int /* bag_index */, std::string>,
              cartographer::mapping::TrajectoryBuilderInterface::SensorId>
         bag_topic_to_sensor_id;
-
     PlayableBagMultiplexer playable_bag_multiplexer(ros_node_);
-    // 1.
-    // 提前将全部的rosbag信息都加入到playable_bag_multiplexer中并进行sensorId的映射
     for (size_t current_bag_index = 0; current_bag_index < bag_filenames.size();
          ++current_bag_index) {
       const std::string& bag_filename = bag_filenames.at(current_bag_index);
       if (!rclcpp::ok()) {
-        return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-            CallbackReturn::SUCCESS;
+        return;
       }
-
+      // 将bag对应的cartographer总的topic_id进行对应，既将不同bag的{sensor_id}放到
+      // 一一列举出来， (<bag_index, sensor_id_string>, sensor_id);
+      // 因为cartographer_node->AddOfflineTrajectory()需要传入sensor_id_set
+      // 所以不同的包创建不同的Trajectory需要明确sensor_id的集合;
       for (const auto& expected_sensor_id :
            bag_expected_sensor_ids.at(current_bag_index)) {
         LOG(INFO) << "expected_sensor_id.id " << expected_sensor_id.id;
@@ -1213,6 +1208,7 @@ LifecycleOfflineReflectorNode::on_activate(
           bag_filename, current_bag_index, kDelay,
           [&tf_publisher, this, serializer](
               std::shared_ptr<rosbag2_storage::SerializedBagMessage> msg) {
+            // TODO: filter bag msg per type ? Planned rosbag2 evolution ?
             if (msg->topic_name == kTfTopic ||
                 msg->topic_name == kTfStaticTopic) {
               if (FLAGS_use_bag_transforms) {
@@ -1234,6 +1230,7 @@ LifecycleOfflineReflectorNode::on_activate(
                   return true;
                 }
               }
+              // 'PlayableBag' 进行过滤消息
               return false;
             } else {
               return true;
@@ -1241,6 +1238,10 @@ LifecycleOfflineReflectorNode::on_activate(
           }));
     }
 
+    // rosbag中包含的topic会以原数据形式放入到playable_bag_multiplexer.topics()中
+    // 通过对cartographer_offline_node的ros_node节点解析remapping得到映射的topic名
+    //  /bcr_bot/scan --> scan；
+    // 多个bag包也可能有相同的topic；
     std::set<std::string> bag_topics;
     std::stringstream bag_topics_string;
     for (const auto& topic : playable_bag_multiplexer.topics()) {
@@ -1250,8 +1251,11 @@ LifecycleOfflineReflectorNode::on_activate(
       bag_topics.insert(resolved_topic);
       bag_topics_string << resolved_topic << ",";
     }
-
     bool print_topics = false;
+    // TODO：
+    // 多个bag包且有多个配置时，必须指定包与sensor_id映射关系，否则会出现警告；这里因为包内topic可能有重复，
+    // 所以需要指定映射指定后， 指定的映射关系bag_topics 中基本不会包含
+    // {bag_1_laserscan1} 这样的sensor_id;
     for (const auto& entry : bag_topic_to_sensor_id) {
       const std::string& resolved_topic = entry.first.second;
       if (bag_topics.count(resolved_topic) == 0) {
@@ -1267,6 +1271,7 @@ LifecycleOfflineReflectorNode::on_activate(
 
     std::unordered_map<int, int> bag_index_to_trajectory_id;
     const rclcpp::Time begin_time =
+        // If no bags were loaded, we cannot peek the time of first message.
         playable_bag_multiplexer.IsMessageAvailable()
             ? playable_bag_multiplexer.PeekMessageTime()
             : rclcpp::Time();
@@ -1283,13 +1288,12 @@ LifecycleOfflineReflectorNode::on_activate(
         rclcpp::Serialization<sensor_msgs::msg::NavSatFix>();
     auto landmark_list_serializer =
         rclcpp::Serialization<cartographer_ros_msgs::msg::LandmarkList>();
-
-    // Main processing loop
+    // 反光柱Laserscan处理方法，当前只支持单个传感器的Laserscan
+    // TODO：加入判断进行建图取消响应操作 配置 STATUS_CANCEL
     while (playable_bag_multiplexer.IsMessageAvailable() && enable_mapping_) {
       if (!::rclcpp::ok()) {
         LOG(FATAL) << "current rclcpp shutdown.";
-        return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-            CallbackReturn::SUCCESS;
+        return;
       }
 
       const auto next_msg_tuple = playable_bag_multiplexer.GetNextMessage();
@@ -1314,6 +1318,8 @@ LifecycleOfflineReflectorNode::on_activate(
 #endif
 
       int trajectory_id;
+      // Lazily add trajectories only when the first message arrives in order
+      // to avoid blocking the sensor queue.
       if (bag_index_to_trajectory_id.count(bag_index) == 0) {
         trajectory_id =
             node.AddOfflineTrajectory(bag_expected_sensor_ids.at(bag_index),
@@ -1328,13 +1334,14 @@ LifecycleOfflineReflectorNode::on_activate(
       } else {
         trajectory_id = bag_index_to_trajectory_id.at(bag_index);
       }
-
+      // 对于多个bag包，只有作了bag_1_scan_1 ->
+      // scan这样的remapping，才能找到对应的sensor_id 当bag_topic_to_sensor_id
       const auto bag_topic = std::make_pair(
           bag_index,
           ros_node_->get_node_base_interface()->resolve_topic_or_service_name(
               msg.topic_name, false));
       auto it = bag_topic_to_sensor_id.find(bag_topic);
-
+      // 找到对应传感器类型进行处理建图
       if (it != bag_topic_to_sensor_id.end()) {
         const std::string& sensor_id = it->second.id;
         if (topic_type == "sensor_msgs/msg/LaserScan") {
@@ -1343,15 +1350,13 @@ LifecycleOfflineReflectorNode::on_activate(
               std::make_shared<sensor_msgs::msg::LaserScan>();
           laser_scan_serializer.deserialize_message(&serialized_msg,
                                                     laser_scan_msg.get());
-
-          // Process laser scan for SLAM
+          // 2. 激光雷达扫描处理
           node.HandleLaserScanMessage(trajectory_id, sensor_id, laser_scan_msg);
-
-          // Store scan for reflector detection
+          // 1. NOTICE:
+          // 获取当前laserscan后，匹配的tracked_pose；可能有多个包，但仍然是单车单雷达可通过获取当前对应
+          // 轨迹的全局tracked_pose，来更新assigner中的位姿，维持数据，要确保assigner中的位姿是最新的，
+          // 也就是说多个包的情况也是按时间顺序发布的。
           if (msg.topic_name == this->scan_topic_) {
-            if (reflector_scan_frame_.empty()) {
-              reflector_scan_frame_ = laser_scan_msg->header.frame_id;
-            }
             int64_t laserTimeStamp =
                 rclcpp::Time(laser_scan_msg->header.stamp).nanoseconds();
             this->setLaserScan(laserTimeStamp, laser_scan_msg);
@@ -1387,11 +1392,7 @@ LifecycleOfflineReflectorNode::on_activate(
           odom_serializer.deserialize_message(&serialized_msg,
                                               odom_scan_msg.get());
           node.HandleOdometryMessage(trajectory_id, sensor_id, odom_scan_msg);
-          // Store odometry for reflector detection
           if (msg.topic_name == this->odom_topic_) {
-            if (reflector_base_frame_.empty()) {
-              reflector_base_frame_ = odom_scan_msg->child_frame_id;
-            }
             int64_t odom_timestamp =
                 rclcpp::Time(odom_scan_msg->header.stamp).nanoseconds();
             odom_timestamps_.push_back(odom_timestamp);
@@ -1418,7 +1419,9 @@ LifecycleOfflineReflectorNode::on_activate(
                                      landmark_list_msg);
         }
       }
-
+      // PlayableBagMultiplexer
+      // 时按顺序进行排序的，所以这里使用其对应的msg时间作为clock时间发布
+      // 不然从rosbag中提取tf_buffer的tflook会报错。
 #ifdef PRE_JAZZY_SERIALIZED_BAG_MSG_FIELD_NAME
       clock.clock = rclcpp::Time(msg.time_stamp);
 #else
@@ -1426,96 +1429,115 @@ LifecycleOfflineReflectorNode::on_activate(
 #endif
       clock_publisher->publish(clock);
       carto_executor_->spin_some();
-
       if (is_last_message_in_bag) {
-        // node.FinishTrajectory(trajectory_id);
-        // rosbag
-        // 中最后一帧数据，但不杀死轨迹保证subscriber对应的sensor_bridge仍然存在
-        // 利用其特性进行最终landmarks的填加
-        LOG(WARNING) << "cartographer处理最后一帧数据, "
-                        "不杀死轨迹保证subscriber对应的sensor_bridge仍然存在, "
-                        "进行后续landmarks处理";
+        node.FinishTrajectory(trajectory_id);
       }
     }
-
-    // ==================== Post-processing: Reflector Detection
-    // ====================
-
-    // Get trajectory poses from Cartographer
-    LOG(INFO) << "完成Cartographer离线建图..... 准备进行反光柱检测回溯......";
-
-    auto ros_mapbuilder_bridge = node.map_builder_bridge_;
-    // 进行全局优化
-    ros_mapbuilder_bridge->RunFinalOptimization();
-    // 统计运行时间
+    //--------------------- 完成rosbag发布 -------------------------
+    // TODO: need a spin for the timer to tick
+    // 确保的FinalOptimization时，还有/clock消息发布，默认30hz；
+    // 但这个时间是最后一个msg时间，
+    // 所以这里需要手动发布一次，确保最后一个msg时间的clock时间也发布出去。
+    auto clock_republish_timer = ros_node_->create_wall_timer(
+        std::chrono::milliseconds(int(kClockPublishFrequencySec)),
+        [&clock_publisher, &clock]() { clock_publisher->publish(clock); });
+    node.RunFinalOptimization();
+    // 统计建图时间！！
     const std::chrono::time_point<std::chrono::steady_clock> end_time =
         std::chrono::steady_clock::now();
     const double wall_clock_seconds =
         std::chrono::duration_cast<std::chrono::duration<double>>(end_time -
                                                                   start_time)
             .count();
-    LOG(INFO) << "激光建图总体耗时: " << wall_clock_seconds << " s";
+
+    LOG(INFO) << "Elapsed wall clock time: " << wall_clock_seconds << " s";
 #ifdef __linux__
     timespec cpu_timespec = {};
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu_timespec);
-    LOG(INFO) << "从程序开启到当前时刻的CPU时间: "
+    LOG(INFO) << "Elapsed CPU time: "
               << (cpu_timespec.tv_sec + 1e-9 * cpu_timespec.tv_nsec) << " s";
     rusage usage;
     CHECK_EQ(getrusage(RUSAGE_SELF, &usage), 0) << strerror(errno);
-    LOG(INFO) << "当前进程的资源使用情况，峰值物理内存: " << usage.ru_maxrss
-              << " KiB";
+    LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
 #endif
-
-    // 请求获取建图完成后全部的trajectory_node_list用于全局位姿回溯
-    cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr
-        poses_request = std::make_shared<
-            cartographer_ros_msgs::srv::TrajectoryQuery::Request>();
-    // 提取首个轨迹的轨迹ID，这里默认为0，因为只进行一次建图，且轨迹ID从0开始
-    poses_request->trajectory_id = 0;
-    cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr
-        poses_res_ptr = std::make_shared<
-            cartographer_ros_msgs::srv::TrajectoryQuery::Response>();
-    ros_mapbuilder_bridge->HandleTrajectoryQuery(poses_request, poses_res_ptr);
-
-    for (const auto& geo_msg : poses_res_ptr->trajectory) {
-      int64_t timestamp = rclcpp::Time(geo_msg.header.stamp).nanoseconds();
-      globalpose_queue_.push(
-          TimeRigid3d(transforms::ToRigid3d(geo_msg.pose), timestamp));
-    }
-
-    LOG(INFO)
-        << "[✔] 完成轨迹回灌，进行反光柱检测回溯...... GlobalPose队列长度: "
-        << globalpose_queue_.size();
-
-    // loadAllFrame进行激光帧扫描帧间里程计提取
-    // Build frame data from stored scans and odometry
-    frames_.clear();
-    if (!loadAllFrames()) {
-      LOG(ERROR) << "[✘] 回溯激光里程失败, 地图中没有构建反光柱...... ";
-    }
-
-    LOG(INFO) << "[✔] 加载完成，共 " << frames_.size() << " 帧待处理";
-
-    // Process each frame for reflector detection
-    for (size_t i = 0; i < frames_.size() - 2 && enable_mapping_; ++i) {
-      processFrame(i, node, poses_request->trajectory_id,
-                   bag_trajectory_options);
-    }
-    LOG(INFO) << "[✔] 完成反光柱轨迹帧回溯...... ";
-
-    // ==================== Final Optimization and Save ====================
-    auto clock_republish_timer = ros_node_->create_wall_timer(
-        std::chrono::milliseconds(int(kClockPublishFrequencySec)),
-        [&clock_publisher, &clock]() { clock_publisher->publish(clock); });
-
-    // Save state
+    // Serialize unless we have neither a bagfile nor an explicit state
+    // filename.
     if (rclcpp::ok() &&
         !(bag_filenames.empty() && output_pbstream_path_.empty()) &&
         enable_mapping_) {
-      writeReflectorsToPbstream(node);
+      LOG(INFO) << "完成Cartographer离线建图..... 准备进反光柱检测回溯......";
+      // 提取优化后轨迹
+      auto ros_mapbuilder_bridge = node.map_builder_bridge_;
+      cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr
+          poses_requeset = std::make_shared<
+              cartographer_ros_msgs::srv::TrajectoryQuery::Request>();
+      poses_requeset->trajectory_id = 0;
+      cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr
+          poses_res_ptr = std::make_shared<
+              cartographer_ros_msgs::srv::TrajectoryQuery::Response>();
+      ros_mapbuilder_bridge->HandleTrajectoryQuery(poses_requeset,
+                                                   poses_res_ptr);
+
+      int odom_indx = 0;
+      for (const auto& geo_msg : poses_res_ptr->trajectory) {
+        int64_t timestamp = rclcpp::Time(geo_msg.header.stamp).nanoseconds();
+        // Add odometry to the time-ordered queue
+        globalpose_queue_.push(
+            TimeRigid3d(transforms::ToRigid3d(geo_msg.pose), timestamp));
+      }
+
+      if (!loadAllFrames()) {
+        LOG(FATAL)<< "mark==  回溯激光里程失败";
+        exit(-1);
+      }
+      RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
+      if(frames_.size() < 2) {
+        LOG(FATAL) << "mark==  统计激光里程帧数小于2";
+      }
+      while (true) {
+        if (current_frame_index_ < frames_.size() - 2) {
+          processFrame(current_frame_index_, node, 0, bag_trajectory_options);
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          current_frame_index_++;
+        } else {
+          RCLCPP_INFO(this->get_logger(), "自动处理完成");
+          auto tracked_reflectors =
+              reflector_detector_.getCurrentAllTrackedReflectors();
+          auto landmark_list = convertTrackedReflectorsToLandmarkList(
+              tracked_reflectors, ros_node_->now().nanoseconds(),
+              "map"  // 只能是全局坐标系
+          );
+          auto trajectories = ros_mapbuilder_bridge->GetTrajectoryStates();
+          CHECK(trajectories.size() == 1);
+          LOG(WARNING)
+              << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
+          LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 反光柱个数:"
+                       << tracked_reflectors.size() << " 带有ID的反光柱个数:" << 
+                       landmark_list->landmarks.size();
+          ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
+          LOG(WARNING)
+              << "[✔] "
+                 "完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
+          break;
+        }
+      }
+
+      const std::string state_output_filename =
+          output_pbstream_path_.empty() ? bag_filenames.front() + ".pbstream"
+                                        : output_pbstream_path_;
+      LOG(INFO) << "....正在保存pbstream地图文件: '" << state_output_filename
+                << "'...";
+      node.SerializeState(state_output_filename,
+                          true /* include_unfinished_submaps */);
+      // TODO: 保存SMAP
+      while (!boost::filesystem::exists(output_pbstream_path_)) {
+        rclcpp::sleep_for(std::chrono::milliseconds(500));
+      }
+      LOG(INFO) << "完成保存地图文件: '" << state_output_filename << "'...";
+      LOG(INFO) << "完成carographer offline建图流程!!.";
     }
 
-    // Cleanup
+    // 3. 节点与执行器解绑
     node.submap_list_publisher_.reset();
     node.trajectory_node_list_publisher_.reset();
     node.tracked_pose_publisher_.reset();
@@ -1529,18 +1551,21 @@ LifecycleOfflineReflectorNode::on_activate(
     node.constrain_list_timer_.reset();
     node.maybe_warn_about_topic_mismatch_timer_.reset();
     clock_republish_timer.reset();
-
-    LOG(INFO) << "[✔] 完成节点资源清理建图流程!!.";
-
+    LOG(INFO) << "完成节点资源清理建图流程!!.";
+    // 配置STAUS_COMPLETE 完成建图
     if (!enable_mapping_) {
-      LOG(WARNING) << "[✘] 未完成carographer offline建图流程, 过程中被取消!!.";
+      LOG(WARNING) << "未完成carographer offline建图流程, 过程中被取消!!.";
       map_build_status_ = MapBuildStatus::STATUS_CANCEL;
     } else {
       map_build_status_ = MapBuildStatus::STATUS_COMPLETE;
     }
-
+    LOG(INFO) << "carto_exector清理rosnode_";
+    carto_executor_->remove_node(ros_node_);
+    LOG(INFO) << "进行INACTIVATE 状态转换!!!!";
     std::thread([&]() {
+      // 等待当前节点进入 INACTIVE 状态（确保 deactivate 完成）
       rclcpp::sleep_for(std::chrono::milliseconds(500));
+      // 3. 发送 cleanup 转换请求（INACTIVE → Unconfigured）
       auto client = this->create_client<lifecycle_msgs::srv::ChangeState>(
           "/lifecycle_cartographer_reflector_node/change_state");
       while (!client->wait_for_service(std::chrono::seconds(1))) {
@@ -1550,16 +1575,17 @@ LifecycleOfflineReflectorNode::on_activate(
       auto request =
           std::make_shared<lifecycle_msgs::srv::ChangeState::Request>();
       request->transition.id =
-          lifecycle_msgs::msg::Transition::TRANSITION_DEACTIVATE;
+          lifecycle_msgs::msg::Transition::TRANSITION_DEACTIVATE;  // cleanup
+                                                                   // 转换ID
 
       auto result = client->async_send_request(request).get();
       if (result->success) {
         RCLCPP_INFO(get_logger(),
                     "deactivate 转换触发成功 (ACTIVE → INACTIVE )");
       } else {
-        RCLCPP_ERROR(get_logger(), "[✘] deactivate 转换触发失败");
+        RCLCPP_ERROR(get_logger(), "deactivate 转换触发失败");
       }
-    }).detach();
+    }).detach();  // 异步执行，不阻塞当前回调
   });
 
   LOG(INFO) << "[✔] cartographer_ros反光柱建图节点启动完成!";
@@ -1571,11 +1597,6 @@ LifecycleOfflineReflectorNode::on_activate(
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 LifecycleOfflineReflectorNode::on_deactivate(
     const rclcpp_lifecycle::State& state) {
-  // 状态跳转后再清理，不会有tf_buffer的问题
-  LOG(INFO) << "[✔]  carto_exector清理rosnode_";
-  carto_executor_->remove_node(ros_node_);
-  LOG(INFO) << "[✔] 进行INACTIVATE 状态转换!!!!";
-
   LOG(INFO) << "DEACTIVATING 从 ACTIVATE -> INACTIVAE 状态转换";
   thread_->join();
   LOG(INFO) << "thread_join() 完成，cartographer安全退出";
