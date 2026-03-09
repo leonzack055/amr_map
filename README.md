@@ -33,7 +33,8 @@ ros2 launch ros2 launch cartographer_ros byd_amr_lds.launch.py
 ```bash
 ros2 launch ros2 launch cartographer_ros online_localization.launch.py load_state_filename:=xxx.bag.pbstream
 ```
-- lifecycle反光柱建图:
+- **lifecycle反光柱建图**:
+
 **第一步**
 ```bash
 ros2 run cartographer_ros cartographer_lifecycle_offline_reflector_node
@@ -65,10 +66,10 @@ ros2 topic echo /mapping_process
 
 
 ## 项目说明文档
-1. docker-ubuntu22.04 建图服务配置与使用
-2. `ros2-mapping-cli` 使用说明, 参考配置文件：[`ros2-mapping-cli.md`](amr_map/ros2-mapping-cli.md)
-3.  建图参数配置说明
-4.  反光柱检测跟踪算法说明与参数配置
+1. `docker-ubuntu22.04` 建图服务配置与使用目录`amr_map/deployment`, 参考配置文件：[`docker-configure.md`](docker-configure.md)
+2. `ros2-mapping-cli` 使用说明, 参考配置文件：[`ros2-mapping-cli.md`](ros2-mapping-cli.md)
+3.  建图参数配置说明, 参考配置文件：[`mapping-configure-info.md`](mapping-configure-info)
+4.  反光柱检测跟踪算法说明与参数配置, 参考配置文件：[`reflector-configure-info.md`](reflector-configure-info.md)
 
 
 ## 项目维护
@@ -79,7 +80,7 @@ ros2 topic echo /mapping_process
 - 继续LOG日志输出，消息调度和定位匹配耗时，以及消息发布耗时
   
 #### 2025.08.22
-- ｀feature/mapping` 进行工厂建图功能
+- ｀leon/dev` 进行工厂建图功能
 - 1. 新增`urdf/byd_sim_amr.urdf`为和`bcr_bot`仿真环境urdf; 实车使用`urdf/byd_amr.urdf`
 - 2. `byd_amr_lds.launch.py` 进行在线建图，新增`robot_state_publisher`，不使用`rosbag`的`tf`
 - 3. 新增`offline_byd_amr2.lua` 进行`frame_id`映射
@@ -100,6 +101,11 @@ ros2 topic echo /mapping_process
 - 5. 关闭直线检测算法服务，并修复生成的`yaml`文件中指定`map_file`的路径问题
 - 6. 新增参数说明文档，以及用户可配置文档说明，具体见: **项目说明文档**(二次开发人员使用时必读)。
 
+#### 2026.03.10
+- `amr_map:leon/dev` 反光柱离线建图功能; `amr_perception:feature/leon/dev` 反光柱检测算法功能
+- 1. 新增docker-file部署功能
+- 2. 新增`docker-*-.sh` 脚本启动文件
+- 3. 新增网页端快速部署功能，具体见: **项目说明文档**(二次开发人员使用时必读)，[网页端快速部署](docker-configure.md)。
 
 ## 项目贡献
 

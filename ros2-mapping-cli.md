@@ -92,8 +92,8 @@ ROS2 Lifecycle Node遵循标准的状态机模型，包含以下**主要状态(P
 
 本项目实现了两个Lifecycle节点：
 
-1. **[`LifecycleOfflineCartoNode`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp)** - 标准离线建图节点
-2. **[`LifecycleOfflineReflectorNode`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp)** - 反光柱离线建图节点
+1. **[`LifecycleOfflineCartoNode`](cartographer_ros/src/lifecycle_offline_node.cpp)** - 标准离线建图节点
+2. **[`LifecycleOfflineReflectorNode`](cartographer_ros/src/lifecycle_offline_reflector_node.cpp)** - 反光柱离线建图节点
 
 **内部状态枚举**：
 
@@ -149,7 +149,7 @@ enum class MapBuildStatus {
 
 #### 1.2.1 启动Lifecycle节点
 
-**启动反光柱建图Lifecycle节点**：
+**1.启动反光柱建图Lifecycle节点**：
 
 ```bash
 # 方式：直接运行节点
@@ -161,7 +161,7 @@ ros2 run cartographer_ros cartographer_lifecycle_offline_reflector_node \
 ```
 [notice] 参数可不指定，以上为默认值
 
-**启动标准建图Lifecycle节点**：
+**2.启动标准建图Lifecycle节点[deperacted]**：
 
 ```bash
 ros2 run cartographer_ros cartographer_lifecycle_offline_node \
@@ -231,7 +231,7 @@ ros2 service call /build_map_service byd_mapbuilder_msgs/srv/MapBuild \
 **开始建图**:
 ```bash
 ros2 service call /build_map_service byd_mapbuilder_msgs/srv/MapBuild \
-  "{req: {cmd_id: 1, bagfile: 'test.bag', filename: 'output.pbstream', configfile: 'offline_bdy_amr2.lua', reflector_param_file: 'reflector_params.yaml'}}"
+"{req: {cmd_id: 1}, filename: "output.pbstream", bagfile: "test.bag", configfile: "offline_bdy_amr2.lua", reflector_param_file: "reflector_params.yaml"}"
 ```
 
 📖: 默认从`/home/admin/map_dir`读取配置文件和rosbag文件，输出文件保存到`/home/admin/map_dir/output_dir`
@@ -265,16 +265,16 @@ ros2 topic echo /mapping_process
 
 #### 1.4.1 LifecycleOfflineReflectorNode 反光柱建图节点
 
-参考源码：[`lifecycle_offline_reflector_node.cpp`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp)
+参考源码：[`lifecycle_offline_reflector_node.cpp`](cartographer_ros/src/lifecycle_offline_reflector_node.cpp)
 
 **核心回调函数**：
 
 | 回调函数 | 功能 |
 |----------|------|
-| [`on_configure()`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp:387) | 创建ROS节点，配置反光柱检测模块 |
-| [`on_activate()`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp:1065) | 启动建图线程，处理rosbag数据 |
-| [`on_deactivate()`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp:1701) | 等待建图线程结束，清理执行器 |
-| [`on_cleanup()`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp:1754) | 重置所有资源和状态变量 |
+| [`on_configure()`]cartographer_ros/src/lifecycle_offline_reflector_node.cpp:387) | 创建ROS节点，配置反光柱检测模块 |
+| [`on_activate()`](cartographer_ros/src/lifecycle_offline_reflector_node.cpp:1065) | 启动建图线程，处理rosbag数据 |
+| [`on_deactivate()`](cartographer_ros/src/lifecycle_offline_reflector_node.cpp:1701) | 等待建图线程结束，清理执行器 |
+| [`on_cleanup()`](cartographer_ros/src/lifecycle_offline_reflector_node.cpp:1754) | 重置所有资源和状态变量 |
 
 **关键特性**：
 - 支持反光柱检测参数文件配置
@@ -284,16 +284,16 @@ ros2 topic echo /mapping_process
 
 #### 1.4.2 LifecycleOfflineCartoNode 标准建图节点
 
-参考源码：[`lifecycle_offline_node.cpp`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp)
+参考源码：[`lifecycle_offline_node.cpp`](cartographer_ros/src/lifecycle_offline_node.cpp)
 
 **核心回调函数**：
 
 | 回调函数 | 功能 |
 |----------|------|
-| [`on_configure()`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp:313) | 创建cartographer节点，初始化参数 |
-| [`on_activate()`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp:334) | 启动建图线程，处理传感器数据 |
-| [`on_deactivate()`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp:942) | 等待线程结束，取消执行器 |
-| [`on_cleanup()`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp:995) | 重置线程和节点资源 |
+| [`on_configure()`](cartographer_ros/src/lifecycle_offline_node.cpp:313) | 创建cartographer节点，初始化参数 |
+| [`on_activate()`](cartographer_ros/src/lifecycle_offline_node.cpp:334) | 启动建图线程，处理传感器数据 |
+| [`on_deactivate()`](cartographer_ros/src/lifecycle_offline_node.cpp:942) | 等待线程结束，取消执行器 |
+| [`on_cleanup()`](cartographer_ros/src/lifecycle_offline_node.cpp:995) | 重置线程和节点资源 |
 
 **关键特性**：
 - 实时反光柱Landmark检测
@@ -308,7 +308,7 @@ ros2 topic echo /mapping_process
 
 ### 2.1 功能概述
 
-参考源码：[`offline_reflector_mapping_node.cpp`](amr_map/cartographer_ros/src/offline_reflector_mapping_node.cpp)
+参考源码：[`offline_reflector_mapping_node.cpp`](cartographer_ros/src/offline_reflector_mapping_node.cpp)
 
 **主要功能**：
 - ✅ 逐帧激光雷达数据处理
@@ -334,7 +334,7 @@ ros2 run cartographer_ros cartographer_offline_reflector_mapping_node \
 ```
 
 #### 2.2.2 参数说明
-
+`reflector_bag_mapping.yaml` 参数文件说明，对应 `/scan` 与 `/odom_combined` 话题的映射应与rosbag包中的数据保持一致，按标默认标准定义：
 | 参数名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `bag_path` | string | "" | rosbag文件路径 |
@@ -546,7 +546,7 @@ global_tracking:
 
 ### 3.2 Cartographer配置
 
-参考配置文件：[`offline_bdy_amr2.lua`](amr_map/cartographer_ros/configuration_files/offline_bdy_amr2.lua)
+参考配置文件：[`offline_bdy_amr2.lua`](cartographer_ros/configuration_files/offline_bdy_amr2.lua)
 
 ```lua
 -- 关键配置项
@@ -649,9 +649,9 @@ pbstream_filename:=/path/you/map.pbstream
 
 | 文件路径 | 说明 |
 |----------|------|
-| [`lifecycle_offline_reflector_node.cpp`](amr_map/cartographer_ros/src/lifecycle_offline_reflector_node.cpp) | 反光柱Lifecycle建图节点 |
-| [`lifecycle_offline_node.cpp`](amr_map/cartographer_ros/src/lifecycle_offline_node.cpp) | 标准Lifecycle建图节点 |
-| [`offline_reflector_mapping_node.cpp`](amr_map/cartographer_ros/src/offline_reflector_mapping_node.cpp) | 交互式建图节点 |
+| [`lifecycle_offline_reflector_node.cpp`](cartographer_ros/src/lifecycle_offline_reflector_node.cpp) | 反光柱Lifecycle建图节点 |
+| [`lifecycle_offline_node.cpp`](cartographer_ros/src/lifecycle_offline_node.cpp) | 标准Lifecycle建图节点 |
+| [`offline_reflector_mapping_node.cpp`](cartographer_ros/src/offline_reflector_mapping_node.cpp) | 交互式建图节点 |
 | [`reflector_detector.hpp`](amr_perception/amr_reflector_noise_handling/include/amr_reflector_noise_handling/reflector_detector.hpp) | 反光柱检测器 |
 | [`global_reflector_tracker.cpp`](amr_perception/amr_reflector_noise_handling/src/global_reflector_tracker.cpp) | 全局反光柱跟踪器 |
 
