@@ -1460,7 +1460,7 @@ LifecycleOfflineReflectorNode::on_activate(
       clock_publisher->publish(clock);
       carto_executor_->spin_some();
       if (is_last_message_in_bag) {
-        node.FinishTrajectory(trajectory_id);
+        // node.FinishTrajectory(trajectory_id);
       }
     }
     //--------------------- 完成rosbag发布 -------------------------
@@ -1512,42 +1512,50 @@ LifecycleOfflineReflectorNode::on_activate(
           TimeRigid3d(transforms::ToRigid3d(geo_msg.pose), timestamp));
     }
 
-    if (enable_mapping_) {
-      if (!loadAllFrames()) {
-        LOG(FATAL) << "mark==  回溯激光里程失败";
-        exit(-1);
+    // 只有在开启use_landmarks时才进行反光柱检测
+    if (bag_trajectory_options.at(0).use_landmarks) {
+      bool process_reflector_detection = true;
+      if (enable_mapping_) {
+        if (!loadAllFrames()) {
+          LOG(FATAL)
+              << "未完成carographer反光柱建图流程, 反光柱建图回溯失败!!.";
+          map_build_status_ = MapBuildStatus::STATUS_ERROR;
+          process_reflector_detection = false;
+        }
       }
-    }
-    RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
-    if (frames_.size() < 2) {
-      LOG(FATAL) << "mark==  统计激光里程帧数小于2";
-    }
-    while (true && enable_mapping_) {
-      if (current_frame_index_ < frames_.size() - 2) {
-        processFrame(current_frame_index_, node, 0, bag_trajectory_options);
-        // std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        current_frame_index_++;
-      } else {
-        RCLCPP_INFO(this->get_logger(), "自动处理完成");
-        auto tracked_reflectors =
-            reflector_detector_.getCurrentAllTrackedReflectors();
-        auto landmark_list = convertTrackedReflectorsToLandmarkList(
-            tracked_reflectors, ros_node_->now().nanoseconds(),
-            "map"  // 只能是全局坐标系
-        );
-        auto trajectories = ros_mapbuilder_bridge->GetTrajectoryStates();
-        CHECK(trajectories.size() == 1);
-        LOG(WARNING)
-            << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
-        LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 反光柱个数:"
-                     << tracked_reflectors.size() << " 带有ID的反光柱个数:"
-                     << landmark_list->landmarks.size();
-        ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
-        LOG(WARNING)
-            << "[✔] "
-               "完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
-        break;
+      RCLCPP_INFO(this->get_logger(), "加载完成，共 %zu 帧", frames_.size());
+      if (frames_.size() < 2) {
+        LOG(FATAL) << "mark==  统计激光里程帧数小于2";
       }
+      while (process_reflector_detection && enable_mapping_) {
+        if (current_frame_index_ < frames_.size() - 2) {
+          processFrame(current_frame_index_, node, 0, bag_trajectory_options);
+          // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          current_frame_index_++;
+        } else {
+          RCLCPP_INFO(this->get_logger(), "自动处理完成");
+          auto tracked_reflectors =
+              reflector_detector_.getCurrentAllTrackedReflectors();
+          auto landmark_list = convertTrackedReflectorsToLandmarkList(
+              tracked_reflectors, ros_node_->now().nanoseconds(),
+              "map"  // 只能是全局坐标系
+          );
+          auto trajectories = ros_mapbuilder_bridge->GetTrajectoryStates();
+          CHECK(trajectories.size() == 1);
+          LOG(WARNING)
+              << "[✔] 全部跟踪到的反光柱, 加入Carotgrapher轨迹图结构.......";
+          LOG(WARNING) << "[✔] 全部跟踪到的反光柱, 反光柱个数:"
+                       << tracked_reflectors.size() << " 带有ID的反光柱个数:"
+                       << landmark_list->landmarks.size();
+          ros_mapbuilder_bridge->SetGlobalLandmarkList(landmark_list);
+          LOG(WARNING)
+              << "[✔] "
+                 "完成反光柱加入轨迹并优化，结束轨迹任务，进行文件保存.......";
+          break;
+        }
+      }
+    } else {
+      LOG(INFO) << "[✔] use_landmarks未开启，跳过反光柱检测回溯";
     }
     // 取消时不存储地图
     if (rclcpp::ok() &&
