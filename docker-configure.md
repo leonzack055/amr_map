@@ -74,6 +74,7 @@ docker容器以attch方式进入，不再进行nginx服务重启。
 
 - `ISAAC_ROS_DEV_DIR`: 指定容器内工作目录,例如: `ISAAC_ROS_DEV_DIR="/home/test/leon/ros_ws"`
 - `IMAGE_NAME`: 指定容器镜像名称,例如: `IMAGE_NAME="10.4.0.233:5443/amr/byd-image/software/x86/ros2/ubuntu22.04:latest"` 对应`my-new-image:latest`
+- `WORK_DIR`: 默认指向`/workspaces/ros-dev`，**对于部直接部署不进行二次开发的同事，使用/home/amdin目录**
 
 **入口脚本:** `/usr/local/bin/scripts/byd-ws-entrypoint.sh` 具体内容参考 [`byd-ws-entrypoint.sh`](./deployment/scripts/byd-ws-entrypoint.sh)
 

@@ -335,6 +335,7 @@ ros2 run cartographer_ros cartographer_offline_reflector_mapping_node \
 
 #### 2.2.2 参数说明
 `reflector_bag_mapping.yaml` 参数文件说明，对应 `/scan` 与 `/odom_combined` 话题的映射应与rosbag包中的数据保持一致，按标默认标准定义：
+
 | 参数名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `bag_path` | string | "" | rosbag文件路径 |

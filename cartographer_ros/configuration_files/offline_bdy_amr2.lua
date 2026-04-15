@@ -55,15 +55,22 @@ TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.2
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 400
 -- slightly slower insertion
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 45
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 90
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.53
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.miss_probability = 0.493
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 1e1
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 30
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 30
+-- online TRAJECTORY_BULDER_USE
+TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.1
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.)
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.translation_delta_cost_weight = 1e-1
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.rotation_delta_cost_weight = 1e-1
 
 -- slightly shorter rays
-TRAJECTORY_BUILDER_2D.min_range = 0.5
+TRAJECTORY_BUILDER_2D.min_range = 0.15
 TRAJECTORY_BUILDER_2D.max_range = 30.
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = .001
 -- wheel odometry is fine
@@ -73,15 +80,23 @@ TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 20
 
 -- less outliers
 POSE_GRAPH.constraint_builder.max_constraint_distance = 5.
-POSE_GRAPH.constraint_builder.min_score = 0.65
+POSE_GRAPH.constraint_builder.loop_closure_translation_weight = 1.1e4
+POSE_GRAPH.constraint_builder.loop_closure_rotation_weight = 1e5
+POSE_GRAPH.constraint_builder.log_matches = false
+-- local structure keep
+POSE_GRAPH.matcher_translation_weight = 1e4
+POSE_GRAPH.matcher_rotation_weight = 1e4
 -- tune down IMU in optimization
 POSE_GRAPH.optimization_problem.acceleration_weight = 0.1 * 1e3
 POSE_GRAPH.optimization_problem.rotation_weight = 0.1 * 3e5
--- ignore wheels in optimization
-POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e5
+-- wheels in optimization
+POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e4
 POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e4
+-- local registration relative pose keep
+POSE_GRAPH.optimization_problem.local_slam_pose_translation_weight = 5e4
+POSE_GRAPH.optimization_problem.local_slam_pose_rotation_weight = 6e4
 -- optimization problem setting
-POSE_GRAPH.optimization_problem.log_solver_summary = true
+POSE_GRAPH.optimization_problem.log_solver_summary = false
 POSE_GRAPH.optimization_problem.huber_scale = 1e2
 POSE_GRAPH.optimize_every_n_nodes = 15
 
